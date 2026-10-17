@@ -100,18 +100,19 @@
     const C = {
       cyan: 0x00f3ff,
       magenta: 0xff0055,
-      yellow: 0xffd23f,
-      violet: 0xb04dff,
-      orange: 0xff9d1c,
+      yellow: 0xffe600,
+      violet: 0xc03bff,
+      pink: 0xff4fd8,
       green: 0x5dff9d,
       white: 0xffffff,
       ink: 0x05070d,
-      paper: 0x0a0f1c,
-      charcoal: 0x1a1b20,
+      paper: 0x10141c,
+      charcoal: 0x1c1e24,
       graphite: 0x8a909c,
     };
     const hex = (c) => '#' + c.toString(16).padStart(6, '0');
     const CSS = {
+      pink: hex(C.pink),
       cyan: hex(C.cyan), magenta: hex(C.magenta), yellow: hex(C.yellow), green: hex(C.green),
       violet: hex(C.violet), white: '#e8f6ff', dim: '#6b7d99', ink: '#05070d',
     };
@@ -126,6 +127,12 @@
     const MAX_GEMS = 300;
     const MAX_COINS = 120;
     const WAVE_LENGTH = 30; // seconds between difficulty steps
+    const COMBO_WINDOW = 2.2; // seconds a combo survives without a kill
+    const COMBO_MILESTONES = [10, 25, 50, 75, 100, 150, 200, 300, 500];
+    /** Attack-speed multiplier granted by the current combo (caps at +30%). */
+    const comboAtkBonus = (combo) => Math.min(combo, 60) * 0.005;
+    const FLIP_START = 420; // ms before the first draft card flips face-up
+    const FLIP_STAGGER = 150; // ms between card flips
 
     // ------------------------------------------------------------------------------------
     // Small helpers
@@ -224,7 +231,7 @@
         apply: (s) => { s.extraShots += 2; } },
       { id: 'speed', name: 'SPEED BOOST', desc: 'Permanently +15% movement speed for this run.', icon: 'ic_speed', color: C.green, max: 5,
         apply: (s) => { s.speed *= 1.15; } },
-      { id: 'vampire', name: 'VAMPIRIC TOUCH', desc: 'Restore 10% max HP on every elite kill and every 10 kills.', icon: 'ic_vampire', color: C.magenta, max: 1,
+      { id: 'vampire', name: 'VAMPIRIC TOUCH', desc: 'Restore 10% max HP on every 10th kill.', icon: 'ic_vampire', color: C.magenta, max: 1,
         apply: (s) => { s.vampiric = true; } },
       { id: 'rapid', name: 'RAPID SCRIBBLE', desc: 'Attack cooldown reduced by 15%.', icon: 'ic_rapid', color: C.yellow, max: 5,
         apply: (s) => { s.attackCooldown = Math.max(0.12, s.attackCooldown * 0.85); } },
@@ -249,7 +256,7 @@
       // Floats straight at the player and ignores internal pillars.
       ghost: { tex: 'ghost', hp: 16, speed: 82, dmg: 8, radius: 15, xp: 1, coin: 0.22, phasing: true, color: C.magenta },
       // Fast, fragile.
-      goblin: { tex: 'goblin', hp: 9, speed: 168, dmg: 6, radius: 14, xp: 1, coin: 0.18, phasing: false, color: C.orange },
+      goblin: { tex: 'goblin', hp: 9, speed: 168, dmg: 6, radius: 14, xp: 1, coin: 0.18, phasing: false, color: C.pink },
       // Slow, tanky.
       blob: { tex: 'blob', hp: 70, speed: 48, dmg: 14, radius: 21, xp: 3, coin: 0.45, phasing: false, color: C.violet },
     };
@@ -303,6 +310,9 @@
         click: () => tone(660, 0.05, 'square', 0.08, 880),
         buy: () => [784, 1046, 1318].forEach((f, i) => setTimeout(() => ctx && tone(f, 0.1, 'square', 0.09), i * 60)),
         deny: () => tone(180, 0.15, 'square', 0.1, 140),
+        flip: () => tone(500, 0.07, 'triangle', 0.1, 1100),
+        combo: () => [880, 1175, 1568, 2093].forEach((f, i) => setTimeout(() => ctx && tone(f, 0.09, 'square', 0.08), i * 45)),
+        slowmo: () => tone(900, 0.6, 'sine', 0.18, 90),
         die: () => tone(400, 0.9, 'sawtooth', 0.25, 40),
         wave: () => tone(220, 0.5, 'sawtooth', 0.12, 660),
       };
@@ -460,8 +470,8 @@
         // ---- Fast Goblin ----
         const goblinPts = pts([[32, 14], [39, 22], [55, 15], [46, 31], [44, 44], [32, 51], [20, 44], [18, 31], [9, 15], [25, 22]]);
         bake('goblin', 64, 64, (g) => {
-          g.fillStyle(C.orange, 0.2); g.fillPoints(goblinPts, true);
-          neon(g, C.orange, 2.5, (g) => g.strokePoints(goblinPts, true, true));
+          g.fillStyle(C.pink, 0.2); g.fillPoints(goblinPts, true);
+          neon(g, C.pink, 2.5, (g) => g.strokePoints(goblinPts, true, true));
           g.fillStyle(C.yellow, 1);
           g.fillTriangle(23, 30, 30, 33, 23, 34); g.fillTriangle(41, 30, 34, 33, 41, 34);
           g.lineStyle(2, 0xffffff, 1);
@@ -497,8 +507,10 @@
           g.fillStyle(color, 0.35); g.fillPoints(d, true);
           neon(g, color, 2, (g) => g.strokePoints(d, true, true));
         });
-        gem('gem', C.cyan, 0.85);
-        gem('gem_big', C.magenta, 1.15);
+        gem('gem', C.yellow, 0.8);
+        gem('gem_big', C.yellow, 1.2);
+        // Shockwave ring used for kills, combo milestones and level-ups.
+        bake('ring', 128, 128, (g) => neon(g, 0xffffff, 3, (g) => g.strokeCircle(64, 64, 54), false));
         bake('coin', 32, 32, (g) => {
           g.fillStyle(C.yellow, 0.3); g.fillCircle(16, 16, 8);
           neon(g, C.yellow, 2, (g) => g.strokeCircle(16, 16, 8));
@@ -765,7 +777,7 @@
 
       preUpdate(time, delta) {
         if (!this.active) return;
-        this.life -= delta / 1000;
+        this.life -= (delta / 1000) * this.scene.timeScale;
         if (this.life <= 0) { this.kill(); return; }
         // Manual wall handling so we can count ricochets. We only reflect when the bullet is
         // moving *outward*, which avoids double reflections without teleporting the body.
@@ -816,8 +828,8 @@
       preUpdate(time, delta) {
         super.preUpdate(time, delta);
         if (!this.active) return;
-        const dt = Math.min(delta, 50) / 1000;
         const scene = this.scene;
+        const dt = (Math.min(delta, 50) / 1000) * scene.timeScale;
         const p = scene.player;
 
         this.spawnT += dt;
@@ -868,7 +880,7 @@
     class Pickup extends Phaser.Physics.Arcade.Image {
       constructor(scene, x, y) {
         super(scene, x, y, 'gem');
-        this.value = 1; this.magnet = false; this.spin = 0;
+        this.value = 1; this.magnet = false; this.spin = 0; this.pull = 0;
       }
 
       drop(x, y, value, texture) {
@@ -877,6 +889,7 @@
         this.body.setCircle(10, 6, 6);
         this.value = value;
         this.magnet = false;
+        this.pull = 0;
         this.spin = rand(-3, 3);
         this.setDepth(5);
         this.setScale(1);
@@ -915,6 +928,14 @@
         this.vampKills = 0;
         this.hurtFlash = 0;
         this.saveTimer = 0;
+        this.critShakeCd = 0;
+        // Combo chain: kills within COMBO_WINDOW seconds of each other keep it alive.
+        this.combo = 0;
+        this.comboTimer = 0;
+        this.bestCombo = 0;
+        // Level-up "matrix" slow-motion: gameplay time scale ramps 1 -> ~0 before the draft opens.
+        this.slowmo = null;
+        this.timeScale = 1;
         this.director = {
           wave: 0, waveTimer: WAVE_LENGTH, spawnTimer: 1.2, spawnInterval: 1.35,
           hpMult: 1, speedMult: 1, dmgMult: 1, eliteTimer: 40,
@@ -964,20 +985,39 @@
           blendMode: 'ADD', tint, emitting: false, maxAliveParticles: 350,
         }).setDepth(20);
         this.fx = {
-          [C.magenta]: burst(C.magenta), [C.orange]: burst(C.orange), [C.violet]: burst(C.violet),
+          [C.magenta]: burst(C.magenta), [C.pink]: burst(C.pink), [C.violet]: burst(C.violet),
           [C.cyan]: burst(C.cyan), [C.yellow]: burst(C.yellow),
         };
 
         // Shared per-frame overlay graphics (elite rings + HP bars).
         this.fxGfx = this.add.graphics().setDepth(15);
+        // Neon ink trails behind every projectile, redrawn each frame in a single batch.
+        this.trailGfx = this.add.graphics().setDepth(11).setBlendMode(Phaser.BlendModes.ADD);
 
-        // Pooled floating damage numbers.
+        // Glowing motion trail behind the player while moving.
+        this.playerTrail = this.add.particles(0, 0, 'spark', {
+          lifespan: 320, speed: 0, frequency: 30, quantity: 1,
+          scale: { start: 1.1, end: 0 }, alpha: { start: 0.45, end: 0 },
+          tint: C.cyan, blendMode: 'ADD', emitting: false,
+        }).setDepth(9);
+        this.playerTrail.startFollow(this.player);
+
+        // Pooled shockwave rings.
+        this.rings = [];
+        this.ringIdx = 0;
+        for (let i = 0; i < 10; i++) {
+          this.rings.push(this.add.image(0, 0, 'ring').setDepth(19).setVisible(false).setBlendMode(Phaser.BlendModes.ADD));
+        }
+
+        // Pooled floating combat text (FCT).
         this.popTexts = [];
         this.popIdx = 0;
-        for (let i = 0; i < 26; i++) {
-          const t = this.add.text(0, 0, '', { fontFamily: FONT_MONO, fontSize: '20px', color: '#ffffff', stroke: CSS.ink, strokeThickness: 4 })
-            .setOrigin(0.5).setDepth(30).setVisible(false);
-          this.popTexts.push({ t, life: 0 });
+        for (let i = 0; i < 32; i++) {
+          const t = this.add.text(0, 0, '', {
+            fontFamily: FONT_MONO, fontSize: '20px', color: '#ffffff', stroke: CSS.ink, strokeThickness: 5,
+            padding: { x: 4, y: 4 },
+          }).setOrigin(0.5).setDepth(30).setVisible(false);
+          this.popTexts.push({ t, life: 0, age: 0, vx: 0, vy: 0, base: 1 });
         }
 
         // Collisions
@@ -1130,10 +1170,48 @@
 
       onResume() {
         this.overlayOpen = false;
+        this.setTimeScale(1);
+        this.cameras.main.zoomTo(1, 250, 'Sine.easeOut', true);
         this.releaseJoystick();
         if (this.input.keyboard) this.input.keyboard.resetKeys(); // key-ups were missed while paused
       }
 
+      /** Gameplay time scale: slows physics, particles and every dt-driven timer together. */
+      setTimeScale(ts) {
+        this.timeScale = ts;
+        // Arcade's fixed step: raising fps shrinks each step's simulated time, and timeScale = 1/ts keeps
+        // the step cadence at the real 60 Hz. Net effect: smooth slow-motion instead of skipped steps.
+        this.physics.world.setFPS(60 / ts);
+        this.physics.world.timeScale = 1 / ts;
+        for (const k in this.fx) this.fx[k].timeScale = ts;
+        this.playerTrail.timeScale = ts;
+      }
+
+      /** Phase 1 of a level-up: a short "matrix" slow-motion dive before the draft pauses the game. */
+      startLevelUpSlowmo() {
+        this.overlayOpen = true;
+        this.slowmo = { t: 0, dur: 0.6 };
+        this.invulnT = Math.max(this.invulnT, 0.9);
+        this.releaseJoystick();
+        this.shockwave(this.player.x, this.player.y, C.cyan, 9, 600);
+        this.fx[C.cyan].explode(36, this.player.x, this.player.y);
+        this.cameras.main.zoomTo(1.15, 550, 'Sine.easeOut', true);
+        this.events.emit('levelup-fx');
+        Sfx.play('slowmo');
+      }
+
+      updateSlowmo(realDt) {
+        const sm = this.slowmo;
+        sm.t += realDt;
+        const k = Math.min(1, sm.t / sm.dur);
+        this.setTimeScale(Math.max(0.06, 1 - k * k * 0.94)); // ease-in towards near-frozen
+        if (k >= 1) {
+          this.slowmo = null;
+          this.openLevelUp();
+        }
+      }
+
+      /** Phase 2 of a level-up: pause the run and open the card draft. */
       openLevelUp() {
         this.overlayOpen = true;
         Sfx.play('level');
@@ -1160,11 +1238,15 @@
 
       // ---------------- Main loop ----------------
       update(time, delta) {
-        const dt = Math.min(delta, 50) / 1000; // clamp hitches so timers can't skip ahead
+        const realDt = Math.min(delta, 50) / 1000; // clamp hitches so timers can't skip ahead
+        if (this.slowmo) this.updateSlowmo(realDt);
+        const dt = realDt * this.timeScale; // gameplay time (slowed during the level-up dive)
 
         this.floorGlow.setAlpha(0.08 + 0.05 * Math.sin(time / 700));
         this.updatePopTexts(dt);
         this.drawEliteFx();
+        this.drawTrails();
+        if (this.critShakeCd > 0) this.critShakeCd -= realDt;
 
         if (this.isGameOver) return;
 
@@ -1172,9 +1254,10 @@
         this.updatePlayer(dt);
         this.updateFiring(dt);
         this.updatePickups(dt);
-        this.updateDirector(dt);
+        this.updateCombo(dt);
+        if (!this.slowmo) this.updateDirector(dt);
 
-        this.saveTimer += dt;
+        this.saveTimer += realDt;
         if (this.saveTimer > 2) { this.saveTimer = 0; if (Save.dirty) Save.persist(); }
 
         // Level-ups are handled at the end of the frame, never inside a physics callback.
@@ -1182,8 +1265,35 @@
           this.xp -= this.xpNext;
           this.level++;
           this.xpNext = xpForLevel(this.level);
-          this.openLevelUp();
+          this.startLevelUpSlowmo();
         }
+      }
+
+      // ---------------- Combo chain ----------------
+      addCombo() {
+        this.combo++;
+        this.comboTimer = COMBO_WINDOW;
+        if (this.combo > this.bestCombo) this.bestCombo = this.combo;
+        if (COMBO_MILESTONES.includes(this.combo)) this.comboMilestone(this.combo);
+      }
+
+      updateCombo(dt) {
+        if (this.combo <= 0) return;
+        this.comboTimer -= dt;
+        if (this.comboTimer <= 0) {
+          if (this.combo >= 10) this.popText(this.player.x, this.player.y - 50, `COMBO x${this.combo} ENDED`, CSS.dim, 18);
+          this.combo = 0;
+          this.comboTimer = 0;
+        }
+      }
+
+      comboMilestone(n) {
+        const color = n >= 50 ? C.magenta : n >= 25 ? C.cyan : C.yellow;
+        this.events.emit('banner', `COMBO x${n}!`, hex(color));
+        this.shockwave(this.player.x, this.player.y, color, 7, 500);
+        this.fx[C.yellow].explode(30, this.player.x, this.player.y);
+        this.cameras.main.shake(120, 0.006);
+        Sfx.play('combo');
       }
 
       updatePlayer(dt) {
@@ -1202,6 +1312,7 @@
         // Arcade integrates velocity (px/s) with the frame delta, so movement is frame-rate independent.
         this.player.body.setVelocity(mx * s.speed, my * s.speed);
         this.player.setRotation(mx * 0.12);
+        this.playerTrail.emitting = Math.hypot(mx, my) > 0.1;
 
         if (this.invulnT > 0) {
           this.invulnT -= dt;
@@ -1232,7 +1343,8 @@
         if (this.fireTimer > 0) return;
         const target = this.findTarget();
         if (!target) { this.fireTimer = 0.05; return; }
-        this.fireTimer = this.stats.attackCooldown;
+        // Combo chains grant bonus attack speed.
+        this.fireTimer = this.stats.attackCooldown / (1 + comboAtkBonus(this.combo));
 
         const s = this.stats;
         const a = Math.atan2(target.y - this.player.y, target.x - this.player.x);
@@ -1264,11 +1376,17 @@
             const o = list[i];
             if (!o.active) continue;
             const dx = px - o.x, dy = py - o.y, d2 = dx * dx + dy * dy;
-            if (!o.magnet && d2 < r2) { o.magnet = true; o.body.setDrag(0, 0); }
+            if (!o.magnet && d2 < r2) {
+              o.magnet = true;
+              // Negative start = a tiny "hop" away before the vacuum kicks in.
+              o.pull = -150;
+              o.body.setDrag(0, 0);
+            }
             if (o.magnet) {
+              // Accelerating pull: slow at first, then a satisfying snap into the player.
+              o.pull = Math.min(1800, o.pull + 2400 * dt);
               const d = Math.sqrt(d2) || 1;
-              const sp = 420 + this.stats.speed;
-              o.body.setVelocity((dx / d) * sp, (dy / d) * sp);
+              o.body.setVelocity((dx / d) * o.pull, (dy / d) * o.pull);
             }
           }
         };
@@ -1361,8 +1479,13 @@
         bullet.kill();
 
         const dead = enemy.hurt(dmg, angle);
-        this.popText(enemy.x, enemy.y - 18 * enemy.scale, String(Math.round(dmg)), crit ? CSS.magenta : CSS.white, crit ? 28 : 18);
-        this.fx[C.cyan].explode(crit ? 6 : 3, bullet.x, bullet.y);
+        if (crit) {
+          this.popText(enemy.x, enemy.y - 20 * enemy.scale, `CRIT! ${Math.round(dmg)}`, CSS.magenta, 30, true);
+          if (this.critShakeCd <= 0) { this.cameras.main.shake(100, 0.005); this.critShakeCd = 0.15; }
+        } else {
+          this.popText(enemy.x, enemy.y - 18 * enemy.scale, String(Math.round(dmg)), CSS.white, 20);
+        }
+        this.fx[C.cyan].explode(crit ? 8 : 3, bullet.x, bullet.y);
         Sfx.play(crit ? 'crit' : 'hit', 0.04);
         if (dead) this.killEnemy(enemy);
       }
@@ -1373,18 +1496,27 @@
         const emitter = this.fx[def.color] || this.fx[C.magenta];
         emitter.explode(e.elite ? 40 : 12, e.x, e.y);
 
-        this.dropGem(e.x, e.y, def.xp * (e.elite ? 6 : 1));
+        if (def === ENEMY_TYPES.blob) {
+          // Blobs burst into a shower of small gems.
+          const n = e.elite ? 12 : 4;
+          for (let i = 0; i < n; i++) this.dropGem(e.x + rand(-14, 14), e.y + rand(-14, 14), 1);
+        } else {
+          this.dropGem(e.x, e.y, def.xp * (e.elite ? 6 : 1));
+        }
         if (e.elite) {
           for (let i = 0; i < 5; i++) this.dropCoin(e.x + rand(-20, 20), e.y + rand(-20, 20));
-          this.cameras.main.shake(160, 0.006);
+          this.cameras.main.shake(160, 0.008);
+          this.shockwave(e.x, e.y, C.yellow, 5, 450);
         } else if (Math.random() < def.coin) {
           this.dropCoin(e.x, e.y);
         }
 
+        this.addCombo();
+
         if (this.stats.vampiric) {
           this.vampKills++;
-          if (e.elite || this.vampKills >= 10) {
-            if (!e.elite) this.vampKills = 0;
+          if (this.vampKills >= 10) {
+            this.vampKills = 0;
             this.heal(this.stats.maxHealth * 0.1);
           }
         }
@@ -1429,8 +1561,8 @@
         const s = this.stats;
         s.currentHealth -= enemy.dmg;
         this.invulnT = 0.55;
-        this.hurtFlash = 1;
-        this.cameras.main.shake(140, 0.008);
+        this.hurtFlash = 1; // HUD turns this into a neon-pink edge flash
+        this.cameras.main.shake(100, 0.01);
         this.popText(player.x, player.y - 30, '-' + Math.round(enemy.dmg), CSS.magenta, 24);
         this.fx[C.magenta].explode(10, player.x, player.y);
         Sfx.play('hurt', 0.1);
@@ -1467,6 +1599,8 @@
         this.player.body.enable = false;
         this.player.setVisible(false);
         this.aim.setVisible(false);
+        this.playerTrail.stop();
+        this.combo = 0;
         this.fx[C.cyan].explode(60, this.player.x, this.player.y);
         this.fx[C.magenta].explode(40, this.player.x, this.player.y);
         this.cameras.main.shake(400, 0.015);
@@ -1481,7 +1615,7 @@
         Save.data.runs++;
         Save.persist();
 
-        const summary = { time: this.elapsed, kills: this.kills, coins: this.runCoins, level: this.level, newBest };
+        const summary = { time: this.elapsed, kills: this.kills, coins: this.runCoins, level: this.level, bestCombo: this.bestCombo, newBest };
         this.time.delayedCall(1100, () => {
           this.cameras.main.fadeOut(300, 5, 7, 13);
           this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('GameOver', summary));
@@ -1489,20 +1623,63 @@
       }
 
       // ---------------- FX helpers ----------------
-      popText(x, y, str, color, size) {
+      /**
+       * Bouncy floating combat text: pops in oversized, hops upward, falls back slightly under
+       * "gravity" and fades. Uses a fixed pool, so heavy combat never allocates.
+       */
+      popText(x, y, str, color, size, big = false) {
         const p = this.popTexts[this.popIdx];
         this.popIdx = (this.popIdx + 1) % this.popTexts.length;
         p.t.setText(str).setColor(color).setFontSize(size).setPosition(x + rand(-10, 10), y).setAlpha(1).setVisible(true);
-        p.life = 0.65;
+        p.t.setDepth(big ? 31 : 30);
+        p.life = big ? 0.9 : 0.7;
+        p.age = 0;
+        p.base = 1;
+        p.big = big;
+        p.vx = rand(-40, 40);
+        p.vy = big ? -230 : -170;
       }
 
       updatePopTexts(dt) {
         for (const p of this.popTexts) {
           if (p.life <= 0) continue;
           p.life -= dt;
-          p.t.y -= 55 * dt;
+          p.age += dt;
+          p.vy += 420 * dt; // gravity gives the hop its bounce
+          p.t.x += p.vx * dt;
+          p.t.y += p.vy * dt;
+          const pop = Math.max(0, 1 - p.age / 0.14); // oversized for the first 140 ms
+          p.t.setScale(p.base * (1 + pop * (p.big ? 1.1 : 0.6)));
           p.t.setAlpha(Math.min(1, p.life / 0.3));
           if (p.life <= 0) p.t.setVisible(false);
+        }
+      }
+
+      /** Expanding neon ring from the pool. */
+      shockwave(x, y, color, scaleTo, duration) {
+        const r = this.rings[this.ringIdx];
+        this.ringIdx = (this.ringIdx + 1) % this.rings.length;
+        this.tweens.killTweensOf(r);
+        r.setPosition(x, y).setTint(color).setScale(0.1).setAlpha(1).setVisible(true);
+        this.tweens.add({
+          targets: r, scale: scaleTo, alpha: 0, duration, ease: 'Cubic.easeOut',
+          onComplete: () => r.setVisible(false),
+        });
+      }
+
+      /** Short neon streak behind every live projectile (one Graphics, one draw call). */
+      drawTrails() {
+        const g = this.trailGfx;
+        g.clear();
+        const list = this.bullets.getChildren();
+        for (let i = 0; i < list.length; i++) {
+          const b = list[i];
+          if (!b.active) continue;
+          const v = b.body.velocity;
+          const tx = b.x - v.x * 0.035, ty = b.y - v.y * 0.035;
+          const col = b.isCrit ? C.magenta : C.cyan;
+          g.lineStyle(7, col, 0.18); g.lineBetween(tx, ty, b.x, b.y);
+          g.lineStyle(3, col, 0.6); g.lineBetween(tx, ty, b.x, b.y);
         }
       }
 
@@ -1549,8 +1726,37 @@
         this.dispHp = 1;
         this.cache = {};
 
+        // Combo meter (right edge, vertically centred). Hidden while there is no chain.
+        this.comboGfx = this.add.graphics();
+        this.comboLabel = neonText(this, W - 40, 250, 'COMBO', 20, CSS.yellow, { mono: true, ox: 1, glow: 8 });
+        this.comboText = neonText(this, W - 40, 300, '', 64, CSS.yellow, { ox: 1, glow: 20 });
+        this.comboBonus = neonText(this, W - 40, 356, '', 16, CSS.white, { mono: true, ox: 1, glow: 0 });
+        this.comboGroup = [this.comboLabel, this.comboText, this.comboBonus];
+        this.comboGroup.forEach((o) => o.setAlpha(0));
+        this.comboAlpha = 0;
+        this.comboPunch = 0;
+        this.lastCombo = 0;
+
+        // Full-screen flash used for the level-up dive.
+        this.flash = this.add.rectangle(0, 0, W, H, C.cyan, 0).setOrigin(0).setBlendMode(Phaser.BlendModes.ADD);
+        this.scan = this.add.graphics().setAlpha(0);
+        for (let y = 0; y < H; y += 6) { this.scan.fillStyle(C.cyan, 0.08); this.scan.fillRect(0, y, W, 2); }
+
         this.gs.events.on('banner', this.showBanner, this);
-        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.gs.events.off('banner', this.showBanner, this));
+        this.gs.events.on('levelup-fx', this.levelUpFx, this);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+          this.gs.events.off('banner', this.showBanner, this);
+          this.gs.events.off('levelup-fx', this.levelUpFx, this);
+        });
+      }
+
+      levelUpFx() {
+        this.tweens.killTweensOf([this.flash, this.scan]);
+        this.flash.setFillStyle(C.cyan, 0.35);
+        this.tweens.add({ targets: this.flash, fillAlpha: 0, duration: 500, ease: 'Quad.easeOut' });
+        this.scan.setAlpha(1);
+        this.tweens.add({ targets: this.scan, alpha: 0, duration: 900, delay: 200 });
+        this.showBanner('LEVEL UP!', CSS.cyan);
       }
 
       showBanner(text, color) {
@@ -1558,6 +1764,39 @@
         this.banner.setText(text).setColor(color).setShadow(0, 0, color, 18, true, true).setAlpha(0).setScale(0.8);
         this.tweens.add({ targets: this.banner, alpha: 1, scale: 1, duration: 220, ease: 'Back.easeOut' });
         this.tweens.add({ targets: this.banner, alpha: 0, delay: 1800, duration: 400 });
+      }
+
+      /** Combo meter: fades in with a chain, punch-scales on each kill, timer bar drains. */
+      updateCombo(gs, delta) {
+        const combo = gs.combo;
+        if (combo > this.lastCombo) this.comboPunch = 1; // punch-scale on every new kill
+        this.lastCombo = combo;
+        const target = combo > 1 ? 1 : 0;
+        this.comboAlpha += (target - this.comboAlpha) * Math.min(1, delta / 120);
+        this.comboPunch = Math.max(0, this.comboPunch - delta / 220);
+
+        const color = combo >= 50 ? CSS.magenta : combo >= 25 ? CSS.cyan : CSS.yellow;
+        const colNum = combo >= 50 ? C.magenta : combo >= 25 ? C.cyan : C.yellow;
+        if (this.cache.comboCol !== color) {
+          this.cache.comboCol = color;
+          this.comboText.setColor(color).setShadow(0, 0, color, 20, true, true);
+          this.comboLabel.setColor(color).setShadow(0, 0, color, 8, true, true);
+        }
+        if (combo > 1) {
+          this.set('combo', this.comboText, 'x' + combo);
+          this.set('comboBonus', this.comboBonus, `+${Math.round(comboAtkBonus(combo) * 100)}% ATK SPEED`);
+        }
+        this.comboText.setScale(1 + this.comboPunch * 0.45).setAngle(-6 + this.comboPunch * 8);
+        this.comboGroup.forEach((o) => o.setAlpha(this.comboAlpha));
+
+        const g = this.comboGfx;
+        g.clear();
+        if (this.comboAlpha > 0.02) {
+          const pct = clamp(gs.comboTimer / COMBO_WINDOW, 0, 1);
+          const w = 170, x = W - 40 - w, y = 378;
+          g.fillStyle(C.ink, 0.8 * this.comboAlpha); g.fillRect(x, y, w, 6);
+          g.fillStyle(colNum, this.comboAlpha); g.fillRect(x + w * (1 - pct), y, w * pct, 6);
+        }
       }
 
       /** Only re-render a Text when its string actually changed (Text re-rasterises on setText). */
@@ -1578,9 +1817,11 @@
         g.clear();
         // XP bar across the very top of the screen.
         g.fillStyle(C.ink, 0.85); g.fillRect(0, 0, W, 12);
-        g.fillStyle(C.cyan, 0.25); g.fillRect(0, 0, W * xpPct, 16);
-        g.fillStyle(C.cyan, 1); g.fillRect(0, 0, W * xpPct, 10);
-        g.lineStyle(1, C.cyan, 0.4); g.lineBetween(0, 12, W, 12);
+        g.fillStyle(C.yellow, 0.12 + 0.06 * Math.sin(time / 200)); g.fillRect(0, 0, W * xpPct, 20);
+        g.fillStyle(C.yellow, 0.3); g.fillRect(0, 0, W * xpPct, 14);
+        g.fillStyle(C.yellow, 1); g.fillRect(0, 0, W * xpPct, 10);
+        g.fillStyle(0xffffff, 0.8); g.fillRect(0, 2, W * xpPct, 2);
+        g.lineStyle(1, C.yellow, 0.4); g.lineBetween(0, 12, W, 12);
 
         // Health bar.
         const x = 30, y = 60, w = 320, h = 22;
@@ -1596,6 +1837,8 @@
         this.set('wave', this.waveText, `WAVE ${gs.director.wave + 1}`);
         this.set('coin', this.coinText, String(gs.runCoins));
         this.set('kill', this.killText, `${gs.kills} KILLS`);
+
+        this.updateCombo(gs, delta);
 
         // Low-health pulse + hit flash.
         let va = gs.hurtFlash * 0.6;
@@ -1619,10 +1862,14 @@
         this.gs = this.scene.get('Game');
         this.ready = false;
         this.done = false;
-        addBlocker(this, 0.78);
+        const blocker = addBlocker(this, 0).setFillStyle(C.ink, 0);
+        this.tweens.add({ targets: blocker, fillAlpha: 0.8, duration: 250 });
 
-        const title = neonText(this, W / 2, 110, 'LEVEL UP!', 76, CSS.cyan, { glow: 26 }).setScale(0.6).setAlpha(0);
-        this.tweens.add({ targets: title, scale: 1, alpha: 1, duration: 320, ease: 'Back.easeOut' });
+        this.buildMatrixRain();
+
+        const title = neonText(this, W / 2, 110, 'LEVEL UP!', 76, CSS.cyan, { glow: 26 }).setScale(2.2).setAlpha(0);
+        this.tweens.add({ targets: title, scale: 1, alpha: 1, duration: 380, ease: 'Back.easeOut' });
+        this.tweens.add({ targets: title, scale: 1.05, duration: 700, delay: 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         neonText(this, W / 2, 172, `LEVEL ${this.level}  —  pick one upgrade`, 22, CSS.white, { mono: true, glow: 0 });
 
         const n = this.choices.length;
@@ -1634,20 +1881,63 @@
         if (this.input.keyboard) {
           ['ONE', 'TWO', 'THREE'].forEach((k, i) => this.input.keyboard.on('keydown-' + k, () => this.pick(i)));
         }
-        // Brief input guard so a tap/keypress already in flight can't pick a card by accident.
-        this.time.delayedCall(350, () => { this.ready = true; });
+        // Input unlocks once every card has flipped face-up, so an in-flight tap can't misfire.
+        this.time.delayedCall(FLIP_START + n * FLIP_STAGGER + 260, () => { this.ready = true; });
+      }
+
+      /** "Matrix" rain: a column of glyphs per lane, recycled when it leaves the screen. */
+      buildMatrixRain() {
+        const glyphs = '01<>/\\#$%&*+=?ABCDEFXYZ@';
+        const column = this.rainColumn = () => {
+          let str = '';
+          const len = Phaser.Math.Between(8, 18);
+          for (let i = 0; i < len; i++) str += glyphs[Math.floor(Math.random() * glyphs.length)] + '\n';
+          return str;
+        };
+        this.rain = [];
+        for (let x = 20; x < W; x += 44) {
+          const t = this.add.text(x, rand(-H, 0), column(), {
+            fontFamily: FONT_MONO, fontSize: '18px', color: Math.random() < 0.2 ? CSS.magenta : CSS.cyan, lineSpacing: -2,
+          }).setOrigin(0.5, 1).setAlpha(0);
+          this.tweens.add({ targets: t, alpha: rand(0.12, 0.3), duration: 300 });
+          this.rain.push({ t, speed: rand(160, 420) });
+        }
+      }
+
+      update(time, delta) {
+        const dt = Math.min(delta, 50) / 1000;
+        for (const r of this.rain) {
+          r.t.y += r.speed * dt;
+          if (r.t.y - r.t.height > H) {
+            r.t.setText(this.rainColumn());
+            r.t.y = rand(-120, 0);
+          }
+        }
       }
 
       buildCard(choice, x, y, index) {
         const card = CARD_BY_ID[choice.id];
         const w = 310, h = 400;
-        const c = this.add.container(x, y + 60).setAlpha(0);
+        const c = this.add.container(x, y + 80).setAlpha(0);
+
+        // --- Back face: a doodled notebook card with a big "?" ---
+        const back = this.add.graphics();
+        back.fillStyle(C.paper, 1); back.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
+        back.lineStyle(1, C.cyan, 0.12);
+        for (let gx = -w / 2 + 20; gx < w / 2; gx += 20) back.lineBetween(gx, -h / 2 + 6, gx, h / 2 - 6);
+        for (let gy = -h / 2 + 20; gy < h / 2; gy += 20) back.lineBetween(-w / 2 + 6, gy, w / 2 - 6, gy);
+        back.lineStyle(12, C.cyan, 0.1); back.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+        back.lineStyle(3, C.cyan, 0.9); back.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+        const q = neonText(this, 0, 0, '?', 150, CSS.cyan, { glow: 24 });
+        const backParts = [back, q];
+
+        // --- Front face ---
         const g = this.add.graphics();
         const draw = (hover) => {
           g.clear();
           g.fillStyle(C.ink, 0.95); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.fillStyle(card.color, hover ? 0.16 : 0.07); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
-          g.lineStyle(14, card.color, hover ? 0.2 : 0.08); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.lineStyle(14, card.color, hover ? 0.22 : 0.08); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.lineStyle(3, card.color, 1); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.lineStyle(1, card.color, 0.4); g.lineBetween(-w / 2 + 24, -10, w / 2 - 24, -10);
         };
@@ -1655,21 +1945,35 @@
         const icon = this.add.image(0, -120, card.icon).setScale(1.7);
         const name = neonText(this, 0, -44, card.name, 30, hex(card.color), { wrap: w - 30 });
         const desc = neonText(this, 0, 60, card.desc, 20, CSS.white, { mono: true, wrap: w - 50, glow: 0, lineSpacing: 4 });
-        const stackStr = card.filler ? 'BONUS' : (choice.stack === 0 ? 'NEW!' : `RANK ${choice.stack} → ${choice.stack + 1}`);
-        const stack = neonText(this, 0, h / 2 - 34, stackStr, 18, choice.stack === 0 ? CSS.yellow : CSS.dim, { mono: true, glow: choice.stack === 0 ? 8 : 0 });
+        const isNew = choice.stack === 0 && !card.filler;
+        const stackStr = card.filler ? 'BONUS' : (isNew ? 'NEW!' : `RANK ${choice.stack} → ${choice.stack + 1}`);
+        const stack = neonText(this, 0, h / 2 - 34, stackStr, 18, isNew ? CSS.yellow : CSS.dim, { mono: true, glow: isNew ? 8 : 0 });
         const key = neonText(this, -w / 2 + 24, -h / 2 + 24, String(index + 1), 18, CSS.dim, { mono: true, glow: 0 });
-        c.add([g, icon, name, desc, stack, key]);
+        const frontParts = [g, icon, name, desc, stack, key];
+        frontParts.forEach((o) => o.setVisible(false));
+
+        c.add([...backParts, ...frontParts]);
         c.setSize(w, h);
         c.setInteractive({ useHandCursor: true });
 
         let pressed = false;
-        c.on('pointerover', () => { draw(true); this.tweens.add({ targets: c, scale: 1.04, duration: 100 }); });
-        c.on('pointerout', () => { pressed = false; draw(false); this.tweens.add({ targets: c, scale: 1, duration: 100 }); });
+        c.on('pointerover', () => { if (!this.ready || this.done) return; draw(true); this.tweens.add({ targets: c, scaleX: 1.05, scaleY: 1.05, duration: 100 }); });
+        c.on('pointerout', () => { pressed = false; if (!this.ready || this.done) return; draw(false); this.tweens.add({ targets: c, scaleX: 1, scaleY: 1, duration: 100 }); });
         c.on('pointerdown', () => { pressed = true; });
         c.on('pointerup', () => { if (pressed) { pressed = false; this.pick(index); } });
 
-        this.tweens.add({ targets: c, y, alpha: 1, duration: 300, delay: 80 + index * 90, ease: 'Back.easeOut' });
-        this.tweens.add({ targets: icon, y: -126, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        // Deal in, then flip: squash scaleX to 0, swap faces, spring back open.
+        this.tweens.add({ targets: c, y, alpha: 1, duration: 300, delay: 60 + index * 90, ease: 'Back.easeOut' });
+        this.tweens.add({
+          targets: c, scaleX: 0, duration: 120, delay: FLIP_START + index * FLIP_STAGGER, ease: 'Quad.easeIn',
+          onComplete: () => {
+            backParts.forEach((o) => o.setVisible(false));
+            frontParts.forEach((o) => o.setVisible(true));
+            Sfx.play('flip', 0);
+            this.tweens.add({ targets: c, scaleX: 1, duration: 220, ease: 'Back.easeOut' });
+            this.tweens.add({ targets: icon, y: -126, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+          },
+        });
         return c;
       }
 
@@ -1678,8 +1982,13 @@
         this.done = true;
         Sfx.play('buy');
         this.gs.applyCard(this.choices[i].id);
-        this.cards.forEach((c, j) => this.tweens.add({ targets: c, alpha: j === i ? 1 : 0, scale: j === i ? 1.1 : 0.9, duration: 160 }));
-        this.time.delayedCall(200, () => {
+        this.cards.forEach((c, j) => {
+          this.tweens.killTweensOf(c);
+          this.tweens.add(j === i
+            ? { targets: c, scaleX: 1.15, scaleY: 1.15, y: c.y - 20, duration: 160, ease: 'Back.easeOut' }
+            : { targets: c, alpha: 0, scaleX: 0.85, scaleY: 0.85, y: c.y + 40, duration: 160 });
+        });
+        this.time.delayedCall(260, () => {
           this.scene.resume('Game');
           this.scene.stop();
         });
@@ -1751,10 +2060,11 @@
           ['RUN TIME', fmtTime(s.time), CSS.white],
           ['TOTAL KILLS', String(s.kills), CSS.white],
           ['LEVEL REACHED', String(s.level), CSS.cyan],
+          ['BEST COMBO', 'x' + (s.bestCombo || 0), CSS.magenta],
           ['COINS COLLECTED', '+' + s.coins, CSS.yellow],
         ];
         rows.forEach(([label, val, col], i) => {
-          const y = 240 + i * 62;
+          const y = 236 + i * 52;
           neonText(this, W / 2 - 250, y, label, 24, CSS.dim, { mono: true, ox: 0, glow: 0 });
           const v = neonText(this, W / 2 + 250, y, val, 34, col, { mono: true, ox: 1, glow: 10 }).setAlpha(0);
           this.tweens.add({ targets: v, alpha: 1, x: { from: W / 2 + 290, to: W / 2 + 250 }, delay: 200 + i * 140, duration: 260 });
