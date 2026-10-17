@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <meta name="theme-color" content="#05070d">
+  <meta name="theme-color" content="#0a0e17">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <style>
-    :root { --cyan: #00f3ff; --magenta: #ff0055; --ink: #05070d; }
+    :root { --cyan: #00ffff; --magenta: #ff0055; --ink: #0a0e17; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
@@ -27,7 +27,7 @@
     }
     body {
       background:
-        radial-gradient(ellipse at center, rgba(0, 243, 255, 0.06) 0%, rgba(5, 7, 13, 0) 60%),
+        radial-gradient(ellipse at center, rgba(0, 255, 255, 0.05) 0%, rgba(5, 7, 13, 0) 60%),
         var(--ink);
     }
     #game {
@@ -97,22 +97,26 @@
     /** Arena size in world pixels; `wall` is the thickness of the charcoal border. */
     const ARENA = { w: 2400, h: 1600, wall: 56 };
 
+    // Palette ("Glowing Neon Sketchbook"):
+    //   player = electric cyan, enemies = neon crimson / hot orange, XP + coins = neon gold.
     const C = {
-      cyan: 0x00f3ff,
-      magenta: 0xff0055,
-      yellow: 0xffe600,
+      cyan: 0x00ffff,
+      crimson: 0xff2233,
+      orange: 0xff7a1a,
+      ember: 0xff3d5e, // blobs: a pinker crimson so the three enemy types stay distinct
+      magenta: 0xff0055, // UI accent (crits, shop, menus)
+      yellow: 0xffd700, // neon gold
       violet: 0xc03bff,
-      pink: 0xff4fd8,
       green: 0x5dff9d,
       white: 0xffffff,
-      ink: 0x05070d,
-      paper: 0x10141c,
-      charcoal: 0x1c1e24,
+      ink: 0x05080f,
+      paper: 0x0a0e17,
+      charcoal: 0x0d121d,
       graphite: 0x8a909c,
     };
     const hex = (c) => '#' + c.toString(16).padStart(6, '0');
     const CSS = {
-      pink: hex(C.pink),
+      crimson: hex(C.crimson),
       cyan: hex(C.cyan), magenta: hex(C.magenta), yellow: hex(C.yellow), green: hex(C.green),
       violet: hex(C.violet), white: '#e8f6ff', dim: '#6b7d99', ink: '#05070d',
     };
@@ -254,11 +258,11 @@
     // ------------------------------------------------------------------------------------
     const ENEMY_TYPES = {
       // Floats straight at the player and ignores internal pillars.
-      ghost: { tex: 'ghost', hp: 16, speed: 82, dmg: 8, radius: 15, xp: 1, coin: 0.22, phasing: true, color: C.magenta },
+      ghost: { tex: 'ghost', hp: 16, speed: 82, dmg: 8, radius: 15, xp: 1, coin: 0.22, phasing: true, color: C.crimson },
       // Fast, fragile.
-      goblin: { tex: 'goblin', hp: 9, speed: 168, dmg: 6, radius: 14, xp: 1, coin: 0.18, phasing: false, color: C.pink },
+      goblin: { tex: 'goblin', hp: 9, speed: 168, dmg: 6, radius: 14, xp: 1, coin: 0.18, phasing: false, color: C.orange },
       // Slow, tanky.
-      blob: { tex: 'blob', hp: 70, speed: 48, dmg: 14, radius: 21, xp: 3, coin: 0.45, phasing: false, color: C.violet },
+      blob: { tex: 'blob', hp: 70, speed: 48, dmg: 14, radius: 21, xp: 3, coin: 0.45, phasing: false, color: C.ember },
     };
 
     // ------------------------------------------------------------------------------------
@@ -373,14 +377,16 @@
       redraw() {
         const g = this.gfx, w = this.w, h = this.h, c = this.color;
         const a = this.enabled ? 1 : 0.35;
+        const r = Math.min(18, h / 2);
         g.clear();
-        g.fillStyle(C.ink, 0.88);
-        g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
-        g.fillStyle(c, (this.hover && this.enabled ? 0.22 : 0.08) * a);
-        g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
-        g.lineStyle(10, c, 0.1 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
-        g.lineStyle(5, c, 0.22 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
-        g.lineStyle(2.5, c, a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+        g.fillStyle(c, (this.hover && this.enabled ? 0.14 : 0.06) * a); g.fillRoundedRect(-w / 2 - 6, -h / 2 - 6, w + 12, h + 12, r + 6);
+        g.fillStyle(C.ink, 0.92); g.fillRoundedRect(-w / 2, -h / 2, w, h, r);
+        g.fillStyle(c, (this.hover && this.enabled ? 0.24 : 0.1) * a); g.fillRoundedRect(-w / 2, -h / 2, w, h, r);
+        // Glossy top highlight.
+        g.fillStyle(0xffffff, 0.06 * a); g.fillRoundedRect(-w / 2 + 8, -h / 2 + 5, w - 16, h * 0.32, Math.min(10, h * 0.16));
+        g.lineStyle(12, c, 0.1 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, r);
+        g.lineStyle(6, c, 0.22 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, r);
+        g.lineStyle(3.5, c, a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, r);
         this.label.setAlpha(a);
       }
       setEnabled(v) { this.enabled = v; this.redraw(); return this; }
@@ -402,6 +408,18 @@
       if (core) { g.lineStyle(Math.max(1, width * 0.35), 0xffffff, 0.75); draw(g); }
     }
     const pts = (arr) => arr.map(([x, y]) => new Phaser.Math.Vector2(x, y));
+
+    /**
+     * Marker-pen stroke: a neon stroke plus a slightly offset, thinner second pass, like a
+     * felt-tip line that was traced twice by hand.
+     */
+    function marker(g, color, width, draw) {
+      neon(g, color, width, draw);
+      g.save();
+      g.translateCanvas(1.3, -1);
+      g.lineStyle(width * 0.55, color, 0.55); draw(g);
+      g.restore();
+    }
 
     /** Sketchy, slightly wobbly rectangle outline like a charcoal pencil. */
     function sketchRect(g, x, y, w, h, jitter, step = 14) {
@@ -439,17 +457,23 @@
           g.generateTexture(key, w, h);
         };
 
-        // ---- Player: neon cyan doodle with a magenta scribble crown ----
+        // ---- Player: electric-cyan doodle with a white-hot core and a scribble crown ----
         bake('player', 64, 64, (g) => {
-          g.fillStyle(C.cyan, 0.16); g.fillCircle(32, 33, 17);
-          neon(g, C.cyan, 3, (g) => g.strokeCircle(32, 33, 17));
-          g.fillStyle(0xffffff, 1); g.fillCircle(26, 30, 3.6); g.fillCircle(38, 30, 3.6);
-          g.fillStyle(C.ink, 1); g.fillCircle(27, 30.5, 1.7); g.fillCircle(39, 30.5, 1.7);
-          neon(g, C.cyan, 2, (g) => { g.beginPath(); g.arc(32, 35, 6, 0.15 * Math.PI, 0.85 * Math.PI, false); g.strokePath(); }, false);
-          neon(g, C.magenta, 2, (g) => g.strokePoints(pts([[23, 18], [27, 10], [31, 16], [35, 9], [39, 16], [42, 11]]), false), false);
+          g.fillStyle(C.cyan, 0.22); g.fillCircle(32, 33, 17);
+          g.fillStyle(0xffffff, 0.14); g.fillCircle(32, 33, 13);
+          g.fillStyle(0xffffff, 0.16); g.fillCircle(32, 33, 8);
+          marker(g, C.cyan, 3.5, (g) => g.strokeCircle(32, 33, 17));
+          g.fillStyle(0xffffff, 1); g.fillCircle(26, 30, 3.8); g.fillCircle(38, 30, 3.8);
+          g.fillStyle(C.ink, 1); g.fillCircle(27, 30.5, 1.8); g.fillCircle(39, 30.5, 1.8);
+          neon(g, C.cyan, 2, (g) => { g.beginPath(); g.arc(32, 35, 6, 0.15 * Math.PI, 0.85 * Math.PI, false); g.strokePath(); });
+          neon(g, C.cyan, 2.5, (g) => g.strokePoints(pts([[23, 18], [27, 10], [31, 16], [35, 9], [39, 16], [42, 11]]), false));
+        });
+        // Soft bloom halo drawn behind the player.
+        bake('halo', 96, 96, (g) => {
+          for (let r = 46; r > 4; r -= 3) { g.fillStyle(0xffffff, 0.022); g.fillCircle(48, 48, r); }
         });
 
-        // ---- Grumpy Ghost ----
+        // ---- Grumpy Ghost (neon crimson) ----
         const ghostPath = (g) => {
           g.beginPath();
           g.moveTo(17, 30);
@@ -459,26 +483,26 @@
           g.closePath();
         };
         bake('ghost', 64, 64, (g) => {
-          g.fillStyle(C.magenta, 0.2); ghostPath(g); g.fillPath();
-          neon(g, C.magenta, 3, (g) => { ghostPath(g); g.strokePath(); });
+          g.fillStyle(C.crimson, 0.22); ghostPath(g); g.fillPath();
+          marker(g, C.crimson, 3.5, (g) => { ghostPath(g); g.strokePath(); });
           g.fillStyle(0xffffff, 1); g.fillCircle(26, 31, 3.2); g.fillCircle(38, 31, 3.2);
-          g.lineStyle(2.5, 0xffffff, 1);
+          g.lineStyle(3, 0xffffff, 1);
           g.lineBetween(21, 23, 29, 27); g.lineBetween(43, 23, 35, 27);
           g.strokePoints(pts([[27, 38], [30, 36], [33, 38], [36, 36]]), false);
         });
 
-        // ---- Fast Goblin ----
+        // ---- Fast Goblin (hot orange) ----
         const goblinPts = pts([[32, 14], [39, 22], [55, 15], [46, 31], [44, 44], [32, 51], [20, 44], [18, 31], [9, 15], [25, 22]]);
         bake('goblin', 64, 64, (g) => {
-          g.fillStyle(C.pink, 0.2); g.fillPoints(goblinPts, true);
-          neon(g, C.pink, 2.5, (g) => g.strokePoints(goblinPts, true, true));
-          g.fillStyle(C.yellow, 1);
+          g.fillStyle(C.orange, 0.22); g.fillPoints(goblinPts, true);
+          marker(g, C.orange, 3, (g) => g.strokePoints(goblinPts, true, true));
+          g.fillStyle(0xffffff, 1);
           g.fillTriangle(23, 30, 30, 33, 23, 34); g.fillTriangle(41, 30, 34, 33, 41, 34);
-          g.lineStyle(2, 0xffffff, 1);
+          g.lineStyle(2.5, 0xffffff, 1);
           g.strokePoints(pts([[25, 41], [28, 44], [31, 41], [34, 44], [37, 41], [40, 44]]), false);
         });
 
-        // ---- Blob Monster ----
+        // ---- Blob Monster (ember crimson) ----
         const blobPts = [];
         for (let i = 0; i < 18; i++) {
           const a = (i / 18) * TAU;
@@ -486,11 +510,11 @@
           blobPts.push(new Phaser.Math.Vector2(32 + Math.cos(a) * r, 33 + Math.sin(a) * r * 0.92));
         }
         bake('blob', 64, 64, (g) => {
-          g.fillStyle(C.violet, 0.24); g.fillPoints(blobPts, true);
-          neon(g, C.violet, 3, (g) => g.strokePoints(blobPts, true, true));
+          g.fillStyle(C.ember, 0.26); g.fillPoints(blobPts, true);
+          marker(g, C.ember, 3.5, (g) => g.strokePoints(blobPts, true, true));
           g.fillStyle(0xffffff, 1); g.fillCircle(25, 29, 5); g.fillCircle(40, 30, 3.5);
           g.fillStyle(C.ink, 1); g.fillCircle(26, 30, 2.4); g.fillCircle(40.5, 31, 1.8);
-          g.lineStyle(2.5, 0xffffff, 0.9); g.lineBetween(26, 41, 39, 40);
+          g.lineStyle(3, 0xffffff, 0.9); g.lineBetween(26, 41, 39, 40);
         });
 
         // ---- Projectile ----
@@ -533,37 +557,48 @@
           neon(g, C.cyan, 3, (g) => g.strokeCircle(40, 40, 28));
         });
 
-        // ---- Graph-paper floor (tileable) ----
+        // ---- Blueprint graph paper (tileable): hand-drawn white lines on deep ink ----
+        // Lines wobble in the middle but meet the tile edges exactly, so the tiling stays seamless.
+        const wobble = (g, x1, y1, x2, y2, amp) => {
+          const n = 8;
+          g.beginPath(); g.moveTo(x1, y1);
+          for (let i = 1; i < n; i++) {
+            const t = i / n;
+            g.lineTo(x1 + (x2 - x1) * t + (x1 === x2 ? rand(-amp, amp) : 0), y1 + (y2 - y1) * t + (y1 === y2 ? rand(-amp, amp) : 0));
+          }
+          g.lineTo(x2, y2); g.strokePath();
+        };
         bake('grid', 128, 128, (g) => {
           g.fillStyle(C.paper, 1); g.fillRect(0, 0, 128, 128);
-          for (let i = 0; i < 70; i++) { g.fillStyle(0xffffff, rand(0.01, 0.035)); g.fillRect(rand(0, 128), rand(0, 128), 1.5, 1.5); }
-          g.lineStyle(1, C.cyan, 0.08);
-          for (let v = 32; v < 128; v += 32) { g.lineBetween(v + 0.5, 0, v + 0.5, 128); g.lineBetween(0, v + 0.5, 128, v + 0.5); }
-          g.lineStyle(2, C.cyan, 0.16);
-          g.lineBetween(1, 0, 1, 128); g.lineBetween(0, 1, 128, 1);
+          for (let i = 0; i < 80; i++) { g.fillStyle(0xffffff, rand(0.01, 0.03)); g.fillRect(rand(0, 128), rand(0, 128), 1.5, 1.5); }
+          g.lineStyle(1, 0xffffff, 0.055);
+          for (let v = 32; v < 128; v += 32) { wobble(g, v, 0, v, 128, 0.7); wobble(g, 0, v, 128, v, 0.7); }
+          g.lineStyle(1.6, 0xffffff, 0.11);
+          wobble(g, 1, 0, 1, 128, 0.5); wobble(g, 0, 1, 128, 1, 0.5);
         });
-        // Additive layer of only the major lines; its alpha pulses in-game ("dynamic grid").
+        // Additive layer of only the major lines; its alpha pulses in-game ("living paper").
         bake('grid_major', 128, 128, (g) => {
-          g.lineStyle(2, C.cyan, 0.9);
+          g.lineStyle(2, 0xffffff, 0.9);
           g.lineBetween(1, 0, 1, 128); g.lineBetween(0, 1, 128, 1);
         });
 
-        // ---- Charcoal walls (tileable strips) ----
+        // ---- Walls: dense white-marker hatching on near-black ink (tileable strips) ----
         const wall = (key, w, h) => bake(key, w, h, (g) => {
           g.fillStyle(C.charcoal, 1); g.fillRect(0, 0, w, h);
-          hatch(g, 0, 0, w, h, Math.round((w * h) / 70), 0x50545e, 0.55);
-          hatch(g, 0, 0, w, h, Math.round((w * h) / 260), 0x9aa0ab, 0.3);
+          hatch(g, 0, 0, w, h, Math.round((w * h) / 60), 0x3a4558, 0.7);
+          hatch(g, 0, 0, w, h, Math.round((w * h) / 220), 0xffffff, 0.22);
         });
         wall('wall_h', 128, ARENA.wall);
         wall('wall_v', ARENA.wall, 128);
 
-        // ---- Pillars (internal obstacles) ----
+        // ---- Pillars (internal obstacles): sketched blocks with a crimson warning X ----
         bake('pillar', 100, 100, (g) => {
-          g.fillStyle(0x121317, 1); g.fillRect(6, 6, 88, 88);
-          hatch(g, 8, 8, 84, 84, 140, 0x5a5e68, 0.55);
-          g.lineStyle(2.5, C.graphite, 0.75); sketchRect(g, 6, 6, 88, 88, 1.6);
-          g.lineStyle(1.5, 0xc8ccd4, 0.35); sketchRect(g, 7, 7, 86, 86, 2.2);
-          g.lineStyle(2, C.magenta, 0.55); g.lineBetween(30, 30, 70, 70); g.lineBetween(70, 30, 30, 70);
+          g.fillStyle(0x0b111c, 1); g.fillRect(6, 6, 88, 88);
+          hatch(g, 8, 8, 84, 84, 150, 0x3a4558, 0.7);
+          hatch(g, 8, 8, 84, 84, 30, 0xffffff, 0.18);
+          g.lineStyle(3, 0xffffff, 0.75); sketchRect(g, 6, 6, 88, 88, 1.6);
+          g.lineStyle(1.5, 0xffffff, 0.35); sketchRect(g, 7, 7, 86, 86, 2.4);
+          marker(g, C.crimson, 2.5, (g) => { g.lineBetween(32, 32, 68, 68); g.lineBetween(68, 32, 32, 68); });
         });
 
         // ---- Icons for cards and shop ----
@@ -580,18 +615,21 @@
 
         g.destroy();
 
-        // ---- Low-health vignette (canvas radial gradient) ----
-        const vig = this.textures.createCanvas('vignette', 256, 144);
-        if (vig) {
-          const ctx = vig.getContext();
+        // ---- Vignettes (canvas radial gradients) ----
+        const radial = (key, stops) => {
+          const tex = this.textures.createCanvas(key, 256, 144);
+          if (!tex) return;
+          const ctx = tex.getContext();
           const grad = ctx.createRadialGradient(128, 72, 40, 128, 72, 150);
-          grad.addColorStop(0, 'rgba(255,0,85,0)');
-          grad.addColorStop(0.6, 'rgba(255,0,85,0.15)');
-          grad.addColorStop(1, 'rgba(255,0,85,0.85)');
+          stops.forEach(([o, c]) => grad.addColorStop(o, c));
           ctx.fillStyle = grad;
           ctx.fillRect(0, 0, 256, 144);
-          vig.refresh();
-        }
+          tex.refresh();
+        };
+        // Neon-pink damage / low-health flash.
+        radial('vignette', [[0, 'rgba(255,0,85,0)'], [0.6, 'rgba(255,0,85,0.15)'], [1, 'rgba(255,0,85,0.85)']]);
+        // Permanent heavy dark edge that frames every screen.
+        radial('vignette_dark', [[0, 'rgba(0,0,0,0)'], [0.55, 'rgba(0,0,0,0.12)'], [0.85, 'rgba(0,0,0,0.5)'], [1, 'rgba(0,0,0,0.82)']]);
 
         bootEl.style.display = 'none';
         this.scene.start('Menu');
@@ -608,7 +646,8 @@
         this.cameras.main.fadeIn(250, 5, 7, 13);
         this.bg = this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0);
         this.bgGlow = this.add.tileSprite(0, 0, W, H, 'grid_major').setOrigin(0).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.12);
-        this.add.rectangle(110, 0, 2, H, C.magenta, 0.35).setOrigin(0);
+        this.add.rectangle(110, 0, 2, H, C.crimson, 0.3).setOrigin(0);
+        this.add.image(W / 2, H / 2, 'vignette_dark').setDisplaySize(W, H);
 
         // Drifting background doodles
         const keys = ['ghost', 'goblin', 'blob', 'ghost', 'blob', 'goblin', 'ghost', 'coin', 'gem'];
@@ -620,7 +659,7 @@
         const t1 = neonText(this, W / 2, 150, 'DUNGEON', 104, CSS.cyan, { glow: 24 });
         const t2 = neonText(this, W / 2 + 20, 250, 'DOODLER', 104, CSS.magenta, { glow: 24 }).setAngle(-3);
         this.tweens.add({ targets: [t1, t2], y: '+=8', duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
-        neonText(this, W / 2, 330, 'a notebook-cyberpunk bullet-heaven', 22, CSS.dim, { mono: true, glow: 0 });
+        neonText(this, W / 2, 330, 'a glowing neon sketchbook bullet-heaven', 22, CSS.dim, { mono: true, glow: 0 });
 
         new NeonButton(this, W / 2, 425, 380, 76, 'PLAY GAME', C.cyan, () => this.go('Game'), 36);
         new NeonButton(this, W / 2, 520, 380, 76, 'SHOP', C.magenta, () => this.go('Shop'), 36);
@@ -682,7 +721,8 @@
       create() {
         this.cameras.main.fadeIn(200, 5, 7, 13);
         this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0);
-        this.add.rectangle(110, 0, 2, H, C.magenta, 0.35).setOrigin(0);
+        this.add.rectangle(110, 0, 2, H, C.crimson, 0.3).setOrigin(0);
+        this.add.image(W / 2, H / 2, 'vignette_dark').setDisplaySize(W, H);
 
         neonText(this, W / 2, 70, 'THE SUPPLY CLOSET', 64, CSS.magenta, { glow: 20 });
         neonText(this, W / 2, 124, 'permanent upgrades — they carry over to every run', 20, CSS.dim, { mono: true, glow: 0 });
@@ -880,7 +920,7 @@
     class Pickup extends Phaser.Physics.Arcade.Image {
       constructor(scene, x, y) {
         super(scene, x, y, 'gem');
-        this.value = 1; this.magnet = false; this.spin = 0; this.pull = 0;
+        this.value = 1; this.magnet = false; this.spin = 0; this.pull = 0; this.pulse = 0;
       }
 
       drop(x, y, value, texture) {
@@ -890,6 +930,7 @@
         this.value = value;
         this.magnet = false;
         this.pull = 0;
+        this.pulse = Math.random() * TAU;
         this.spin = rand(-3, 3);
         this.setDepth(5);
         this.setScale(1);
@@ -901,6 +942,11 @@
       preUpdate(time, delta) {
         if (!this.active) return;
         this.rotation += this.spin * delta / 1000;
+        // Pulsating glow so loot always catches the eye.
+        this.pulse += delta / 1000 * 7;
+        const k = 1 + 0.18 * Math.sin(this.pulse);
+        this.setScale(k);
+        this.setAlpha(0.8 + 0.2 * Math.sin(this.pulse));
       }
 
       collect() { this.disableBody(true, true); }
@@ -970,6 +1016,7 @@
         this.player = this.physics.add.image(ARENA.w / 2, ARENA.h / 2, 'player').setDepth(10);
         this.player.body.setCircle(16, 16, 17);
         this.player.setCollideWorldBounds(true);
+        this.halo = this.add.image(this.player.x, this.player.y, 'halo').setTint(C.cyan).setDepth(9).setBlendMode(Phaser.BlendModes.ADD);
         this.aim = this.add.image(this.player.x, this.player.y, 'aim').setDepth(11).setBlendMode(Phaser.BlendModes.ADD);
 
         // Pools
@@ -985,7 +1032,7 @@
           blendMode: 'ADD', tint, emitting: false, maxAliveParticles: 350,
         }).setDepth(20);
         this.fx = {
-          [C.magenta]: burst(C.magenta), [C.pink]: burst(C.pink), [C.violet]: burst(C.violet),
+          [C.crimson]: burst(C.crimson), [C.orange]: burst(C.orange), [C.ember]: burst(C.ember), [C.magenta]: burst(C.magenta),
           [C.cyan]: burst(C.cyan), [C.yellow]: burst(C.yellow),
         };
 
@@ -997,8 +1044,8 @@
         // Glowing motion trail behind the player while moving.
         this.playerTrail = this.add.particles(0, 0, 'spark', {
           lifespan: 320, speed: 0, frequency: 30, quantity: 1,
-          scale: { start: 1.1, end: 0 }, alpha: { start: 0.45, end: 0 },
-          tint: C.cyan, blendMode: 'ADD', emitting: false,
+          scale: { start: 1.5, end: 0 }, alpha: { start: 0.6, end: 0 },
+          tint: [C.cyan, 0xffffff], blendMode: 'ADD', emitting: false,
         }).setDepth(9);
         this.playerTrail.startFollow(this.player);
 
@@ -1074,10 +1121,10 @@
         const { w, h, wall } = ARENA;
         this.floor = this.add.tileSprite(0, 0, w, h, 'grid').setOrigin(0).setDepth(0);
         this.floorGlow = this.add.tileSprite(0, 0, w, h, 'grid_major').setOrigin(0).setDepth(1)
-          .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.1);
+          .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.03);
         // Notebook margin line + punch holes.
-        this.add.rectangle(wall + 140, 0, 3, h, C.magenta, 0.32).setOrigin(0).setDepth(1);
-        for (let y = 260; y < h - 100; y += 420) this.add.circle(wall + 60, y, 18, C.ink, 1).setStrokeStyle(2, C.graphite, 0.5).setDepth(1);
+        this.add.rectangle(wall + 140, 0, 3, h, C.crimson, 0.28).setOrigin(0).setDepth(1);
+        for (let y = 260; y < h - 100; y += 420) this.add.circle(wall + 60, y, 18, C.ink, 1).setStrokeStyle(2.5, 0xffffff, 0.35).setDepth(1);
 
         // Walls: four tiled charcoal strips.
         this.add.tileSprite(0, 0, w, wall, 'wall_h').setOrigin(0).setDepth(2);
@@ -1086,9 +1133,9 @@
         this.add.tileSprite(w - wall, wall, wall, h - wall * 2, 'wall_v').setOrigin(0).setDepth(2);
         // Hand-drawn inner border, drawn once.
         const edge = this.add.graphics().setDepth(3);
-        edge.lineStyle(3, C.graphite, 0.8); sketchRect(edge, wall, wall, w - wall * 2, h - wall * 2, 2.5, 40);
-        edge.lineStyle(1.5, 0xd0d4dc, 0.35); sketchRect(edge, wall - 2, wall - 2, w - wall * 2 + 4, h - wall * 2 + 4, 3, 50);
-        edge.lineStyle(6, C.magenta, 0.08); edge.strokeRect(wall + 3, wall + 3, w - wall * 2 - 6, h - wall * 2 - 6);
+        edge.lineStyle(10, 0xffffff, 0.04); edge.strokeRect(wall + 2, wall + 2, w - wall * 2 - 4, h - wall * 2 - 4);
+        edge.lineStyle(4, 0xffffff, 0.8); sketchRect(edge, wall, wall, w - wall * 2, h - wall * 2, 2.5, 40);
+        edge.lineStyle(2, 0xffffff, 0.3); sketchRect(edge, wall - 3, wall - 3, w - wall * 2 + 6, h - wall * 2 + 6, 3, 50);
 
         // Internal obstacles (static bodies). The arena centre is kept clear for the spawn.
         this.pillars = this.physics.add.staticGroup();
@@ -1242,7 +1289,7 @@
         if (this.slowmo) this.updateSlowmo(realDt);
         const dt = realDt * this.timeScale; // gameplay time (slowed during the level-up dive)
 
-        this.floorGlow.setAlpha(0.08 + 0.05 * Math.sin(time / 700));
+        this.floorGlow.setAlpha(0.03 + 0.02 * Math.sin(time / 700));
         this.updatePopTexts(dt);
         this.drawEliteFx();
         this.drawTrails();
@@ -1323,6 +1370,7 @@
         const ax = this.player.x + Math.cos(this.aimAngle) * 34;
         const ay = this.player.y + Math.sin(this.aimAngle) * 34;
         this.aim.setPosition(ax, ay).setRotation(this.aimAngle);
+        this.halo.setPosition(this.player.x, this.player.y).setScale(1.25 + 0.1 * Math.sin(this.elapsed * 5)).setAlpha(0.55);
       }
 
       findTarget() {
@@ -1599,6 +1647,7 @@
         this.player.body.enable = false;
         this.player.setVisible(false);
         this.aim.setVisible(false);
+        this.halo.setVisible(false);
         this.playerTrail.stop();
         this.combo = 0;
         this.fx[C.cyan].explode(60, this.player.x, this.player.y);
@@ -1703,44 +1752,88 @@
     // ------------------------------------------------------------------------------------
     // HUD (pinned to the screen; runs in parallel with Game)
     // ------------------------------------------------------------------------------------
+    /**
+     * Thick, fully-rounded glowing progress bar.
+     * `trail` (0..1) draws a pale "recently lost" segment behind the main fill.
+     */
+    function glowBar(g, x, y, w, h, pct, color, trail = 0) {
+      const r = h / 2;
+      g.fillStyle(color, 0.07); g.fillRoundedRect(x - 7, y - 7, w + 14, h + 14, r + 7);
+      g.fillStyle(color, 0.12); g.fillRoundedRect(x - 3, y - 3, w + 6, h + 6, r + 3);
+      g.fillStyle(C.ink, 0.95); g.fillRoundedRect(x, y, w, h, r);
+      const inset = 4, ih = h - inset * 2, iw = w - inset * 2, ir = ih / 2;
+      const pill = (pw, col, a) => {
+        if (pw < 1) return;
+        g.fillStyle(col, a);
+        g.fillRoundedRect(x + inset, y + inset, pw, ih, Math.min(ir, pw / 2));
+      };
+      if (trail > pct) pill(iw * trail, 0xffffff, 0.5);
+      pill(iw * pct, color, 1);
+      // Glossy highlight along the top of the fill.
+      const hw = iw * pct - ir * 1.2;
+      if (hw > 2) {
+        g.fillStyle(0xffffff, 0.4);
+        g.fillRoundedRect(x + inset + ir * 0.6, y + inset + ih * 0.14, hw, ih * 0.26, Math.min(ih * 0.13, hw / 2));
+      }
+      g.lineStyle(3, color, 0.95); g.strokeRoundedRect(x, y, w, h, r);
+    }
+
     class HUDScene extends Phaser.Scene {
       constructor() { super('HUD'); }
 
       create() {
         this.gs = this.scene.get('Game');
+        // Heavy dark vignette (always on) + pink damage vignette (pulses on hits / low HP).
+        this.add.image(W / 2, H / 2, 'vignette_dark').setDisplaySize(W, H);
         this.vignette = this.add.image(W / 2, H / 2, 'vignette').setDisplaySize(W, H).setAlpha(0);
         this.g = this.add.graphics();
 
-        this.lvlText = neonText(this, 24, 34, '', 30, CSS.cyan, { ox: 0 });
-        this.hpText = neonText(this, 30 + 160, 71, '', 16, CSS.white, { mono: true, glow: 0, strokeThickness: 3 });
-        this.timeText = neonText(this, W / 2, 42, '', 40, CSS.white, { mono: true, glow: 8 });
-        this.waveText = neonText(this, W / 2, 78, '', 16, CSS.dim, { mono: true, glow: 0 });
+        // --- Player panel (top-left): level badge, HP bar, XP bar ---
+        this.badge = { x: 62, y: 60, r: 36 };
+        this.lvlLabel = neonText(this, 62, 42, 'LV', 15, CSS.cyan, { mono: true, glow: 6 });
+        this.lvlText = neonText(this, 62, 66, '', 34, CSS.white, { glow: 14 });
+        this.hpText = neonText(this, 118 + 170, 45, '', 17, CSS.white, { mono: true, glow: 0, strokeThickness: 4 });
+        this.xpText = neonText(this, 118 + 170, 82, '', 13, CSS.white, { mono: true, glow: 0, strokeThickness: 3 });
 
-        this.add.image(W - 250, 42, 'coin').setScale(1.3);
-        this.coinText = neonText(this, W - 228, 42, '', 26, CSS.yellow, { mono: true, ox: 0 });
-        this.killText = neonText(this, W - 250, 78, '', 16, CSS.dim, { mono: true, ox: 0, glow: 0 });
+        // --- Run clock (top-centre) ---
+        this.timeText = neonText(this, W / 2, 42, '', 42, CSS.white, { mono: true, glow: 10 });
+        this.waveText = neonText(this, W / 2, 84, '', 16, CSS.crimson, { mono: true, glow: 8 });
 
-        new NeonButton(this, W - 52, 46, 64, 56, 'II', C.cyan, () => this.gs.requestPause(), 26);
+        // --- Wallet + kills (top-right) ---
+        this.coinIcon = this.add.image(W - 296, 44, 'coin').setScale(1.5);
+        this.coinText = neonText(this, W - 274, 44, '', 28, CSS.yellow, { mono: true, ox: 0, glow: 12 });
+        this.killText = neonText(this, W - 223, 92, '', 16, CSS.white, { mono: true, glow: 0 });
 
-        this.banner = neonText(this, W / 2, 170, '', 40, CSS.magenta, { glow: 18 }).setAlpha(0);
-        this.dispHp = 1;
-        this.cache = {};
+        new NeonButton(this, W - 56, 46, 64, 58, 'II', C.cyan, () => this.gs.requestPause(), 26);
 
-        // Combo meter (right edge, vertically centred). Hidden while there is no chain.
+        this.banner = neonText(this, W / 2, 170, '', 44, CSS.magenta, { glow: 20 }).setAlpha(0);
+
+        // --- Combo meter (right edge). Hidden while there is no chain. ---
         this.comboGfx = this.add.graphics();
         this.comboLabel = neonText(this, W - 40, 250, 'COMBO', 20, CSS.yellow, { mono: true, ox: 1, glow: 8 });
-        this.comboText = neonText(this, W - 40, 300, '', 64, CSS.yellow, { ox: 1, glow: 20 });
+        this.comboText = neonText(this, W - 40, 302, '', 68, CSS.yellow, { ox: 1, glow: 22 });
         this.comboBonus = neonText(this, W - 40, 356, '', 16, CSS.white, { mono: true, ox: 1, glow: 0 });
         this.comboGroup = [this.comboLabel, this.comboText, this.comboBonus];
         this.comboGroup.forEach((o) => o.setAlpha(0));
-        this.comboAlpha = 0;
-        this.comboPunch = 0;
-        this.lastCombo = 0;
 
-        // Full-screen flash used for the level-up dive.
+        // Full-screen flash + scanlines used for the level-up dive.
         this.flash = this.add.rectangle(0, 0, W, H, C.cyan, 0).setOrigin(0).setBlendMode(Phaser.BlendModes.ADD);
         this.scan = this.add.graphics().setAlpha(0);
         for (let y = 0; y < H; y += 6) { this.scan.fillStyle(C.cyan, 0.08); this.scan.fillRect(0, y, W, 2); }
+
+        // Animated display state: values ease toward the truth, "punch" values decay to 0.
+        this.dispHp = 1;
+        this.dispXp = 0;
+        this.comboAlpha = 0;
+        this.comboPunch = 0;
+        this.lastCombo = 0;
+        this.coinPunch = 0;
+        this.lastCoins = 0;
+        this.lvlPunch = 0;
+        this.lastLevel = 1;
+        this.hpPunch = 0;
+        this.lastHp = this.gs.stats.currentHealth;
+        this.cache = {};
 
         this.gs.events.on('banner', this.showBanner, this);
         this.gs.events.on('levelup-fx', this.levelUpFx, this);
@@ -1759,44 +1852,12 @@
         this.showBanner('LEVEL UP!', CSS.cyan);
       }
 
+      /** Banner slams in oversized, settles with an elastic wobble, then fades out. */
       showBanner(text, color) {
         this.tweens.killTweensOf(this.banner);
-        this.banner.setText(text).setColor(color).setShadow(0, 0, color, 18, true, true).setAlpha(0).setScale(0.8);
-        this.tweens.add({ targets: this.banner, alpha: 1, scale: 1, duration: 220, ease: 'Back.easeOut' });
-        this.tweens.add({ targets: this.banner, alpha: 0, delay: 1800, duration: 400 });
-      }
-
-      /** Combo meter: fades in with a chain, punch-scales on each kill, timer bar drains. */
-      updateCombo(gs, delta) {
-        const combo = gs.combo;
-        if (combo > this.lastCombo) this.comboPunch = 1; // punch-scale on every new kill
-        this.lastCombo = combo;
-        const target = combo > 1 ? 1 : 0;
-        this.comboAlpha += (target - this.comboAlpha) * Math.min(1, delta / 120);
-        this.comboPunch = Math.max(0, this.comboPunch - delta / 220);
-
-        const color = combo >= 50 ? CSS.magenta : combo >= 25 ? CSS.cyan : CSS.yellow;
-        const colNum = combo >= 50 ? C.magenta : combo >= 25 ? C.cyan : C.yellow;
-        if (this.cache.comboCol !== color) {
-          this.cache.comboCol = color;
-          this.comboText.setColor(color).setShadow(0, 0, color, 20, true, true);
-          this.comboLabel.setColor(color).setShadow(0, 0, color, 8, true, true);
-        }
-        if (combo > 1) {
-          this.set('combo', this.comboText, 'x' + combo);
-          this.set('comboBonus', this.comboBonus, `+${Math.round(comboAtkBonus(combo) * 100)}% ATK SPEED`);
-        }
-        this.comboText.setScale(1 + this.comboPunch * 0.45).setAngle(-6 + this.comboPunch * 8);
-        this.comboGroup.forEach((o) => o.setAlpha(this.comboAlpha));
-
-        const g = this.comboGfx;
-        g.clear();
-        if (this.comboAlpha > 0.02) {
-          const pct = clamp(gs.comboTimer / COMBO_WINDOW, 0, 1);
-          const w = 170, x = W - 40 - w, y = 378;
-          g.fillStyle(C.ink, 0.8 * this.comboAlpha); g.fillRect(x, y, w, 6);
-          g.fillStyle(colNum, this.comboAlpha); g.fillRect(x + w * (1 - pct), y, w * pct, 6);
-        }
+        this.banner.setText(text).setColor(color).setShadow(0, 0, color, 20, true, true).setAlpha(0).setScale(2.2).setAngle(-4);
+        this.tweens.add({ targets: this.banner, alpha: 1, scale: 1, angle: 0, duration: 420, ease: 'Elastic.easeOut', easeParams: [1.1, 0.5] });
+        this.tweens.add({ targets: this.banner, alpha: 0, scale: 0.85, delay: 1700, duration: 380, ease: 'Quad.easeIn' });
       }
 
       /** Only re-render a Text when its string actually changed (Text re-rasterises on setText). */
@@ -1808,31 +1869,62 @@
         const gs = this.gs;
         if (!gs || !gs.stats) return;
         const s = gs.stats;
+        const k = Math.min(1, delta / 140); // easing factor for animated readouts
+        const decay = delta / 260;
+
+        // --- Animated state ---
         const hpPct = clamp(s.currentHealth / s.maxHealth, 0, 1);
         const xpPct = clamp(gs.xp / gs.xpNext, 0, 1);
-        this.dispHp += (hpPct - this.dispHp) * Math.min(1, delta / 160);
+        this.dispHp += (hpPct - this.dispHp) * Math.min(1, delta / 400); // slow drain = readable damage
         if (this.dispHp < hpPct) this.dispHp = hpPct;
+        if (xpPct < this.dispXp - 0.5) this.dispXp = 0; // wrapped after a level-up
+        this.dispXp += (xpPct - this.dispXp) * k;
+
+        if (s.currentHealth < this.lastHp) this.hpPunch = 1;
+        this.lastHp = s.currentHealth;
+        if (gs.runCoins > this.lastCoins) this.coinPunch = 1;
+        this.lastCoins = gs.runCoins;
+        if (gs.level > this.lastLevel) this.lvlPunch = 1;
+        this.lastLevel = gs.level;
+        this.hpPunch = Math.max(0, this.hpPunch - decay);
+        this.coinPunch = Math.max(0, this.coinPunch - decay);
+        this.lvlPunch = Math.max(0, this.lvlPunch - decay * 0.6);
 
         const g = this.g;
         g.clear();
-        // XP bar across the very top of the screen.
-        g.fillStyle(C.ink, 0.85); g.fillRect(0, 0, W, 12);
-        g.fillStyle(C.yellow, 0.12 + 0.06 * Math.sin(time / 200)); g.fillRect(0, 0, W * xpPct, 20);
-        g.fillStyle(C.yellow, 0.3); g.fillRect(0, 0, W * xpPct, 14);
-        g.fillStyle(C.yellow, 1); g.fillRect(0, 0, W * xpPct, 10);
-        g.fillStyle(0xffffff, 0.8); g.fillRect(0, 2, W * xpPct, 2);
-        g.lineStyle(1, C.yellow, 0.4); g.lineBetween(0, 12, W, 12);
 
-        // Health bar.
-        const x = 30, y = 60, w = 320, h = 22;
-        g.fillStyle(C.ink, 0.85); g.fillRoundedRect(x, y, w, h, 6);
-        g.fillStyle(0xffffff, 0.45); g.fillRect(x + 3, y + 3, (w - 6) * this.dispHp, h - 6);
-        g.fillStyle(C.magenta, 1); g.fillRect(x + 3, y + 3, (w - 6) * hpPct, h - 6);
-        g.lineStyle(6, C.magenta, 0.15); g.strokeRoundedRect(x, y, w, h, 6);
-        g.lineStyle(2, C.magenta, 0.9); g.strokeRoundedRect(x, y, w, h, 6);
+        // --- Level badge ---
+        const b = this.badge, br = b.r * (1 + this.lvlPunch * 0.3);
+        g.fillStyle(C.cyan, 0.08 + 0.05 * Math.sin(time / 300)); g.fillCircle(b.x, b.y, br + 10);
+        g.fillStyle(C.cyan, 0.14); g.fillCircle(b.x, b.y, br + 4);
+        g.fillStyle(C.ink, 0.95); g.fillCircle(b.x, b.y, br);
+        g.lineStyle(4, C.cyan, 1); g.strokeCircle(b.x, b.y, br);
+        // XP progress ring around the badge.
+        if (this.dispXp > 0.01) {
+          g.lineStyle(4, C.yellow, 0.9);
+          g.beginPath(); g.arc(b.x, b.y, br + 7, -Math.PI / 2, -Math.PI / 2 + TAU * this.dispXp, false); g.strokePath();
+        }
+        this.lvlText.setScale(1 + this.lvlPunch * 0.6);
 
-        this.set('lvl', this.lvlText, `LV ${gs.level}`);
+        // --- HP + XP bars (shake briefly when hit) ---
+        const shake = this.hpPunch * Math.sin(time * 0.09) * 5;
+        glowBar(g, 118 + shake, 30, 340, 30, hpPct, C.crimson, this.dispHp);
+        glowBar(g, 118, 72, 340, 20, this.dispXp, C.yellow);
+        this.hpText.setX(118 + 170 + shake).setScale(1 + this.hpPunch * 0.25);
+
+        // --- Wave pill + wallet pill ---
+        g.fillStyle(C.ink, 0.85); g.fillRoundedRect(W / 2 - 62, 72, 124, 26, 13);
+        g.lineStyle(2, C.crimson, 0.7); g.strokeRoundedRect(W / 2 - 62, 72, 124, 26, 13);
+        g.fillStyle(C.yellow, 0.08); g.fillRoundedRect(W - 330, 16, 214, 56, 28);
+        g.fillStyle(C.ink, 0.9); g.fillRoundedRect(W - 326, 20, 206, 48, 24);
+        g.lineStyle(3, C.yellow, 0.9); g.strokeRoundedRect(W - 326, 20, 206, 48, 24);
+        const cp = 1 + this.coinPunch * 0.45;
+        this.coinIcon.setScale(1.5 * cp);
+        this.coinText.setScale(1 + this.coinPunch * 0.3);
+
+        this.set('lvl', this.lvlText, String(gs.level));
         this.set('hp', this.hpText, `${Math.ceil(s.currentHealth)} / ${Math.round(s.maxHealth)}`);
+        this.set('xp', this.xpText, `${Math.floor(gs.xp)} / ${gs.xpNext} XP`);
         this.set('time', this.timeText, fmtTime(gs.elapsed));
         this.set('wave', this.waveText, `WAVE ${gs.director.wave + 1}`);
         this.set('coin', this.coinText, String(gs.runCoins));
@@ -1840,10 +1932,43 @@
 
         this.updateCombo(gs, delta);
 
-        // Low-health pulse + hit flash.
-        let va = gs.hurtFlash * 0.6;
+        // Damage flash + low-health pulse (neon pink screen edges).
+        let va = gs.hurtFlash * 0.75;
         if (hpPct < 0.3 && !gs.isGameOver) va = Math.max(va, (0.3 + 0.2 * Math.sin(time / 140)) * (1 - hpPct / 0.3));
         this.vignette.setAlpha(va);
+      }
+
+      /** Combo meter: fades in with a chain, punch-scales on each kill, thick timer bar drains. */
+      updateCombo(gs, delta) {
+        const combo = gs.combo;
+        if (combo > this.lastCombo) this.comboPunch = 1;
+        this.lastCombo = combo;
+        const target = combo > 1 ? 1 : 0;
+        this.comboAlpha += (target - this.comboAlpha) * Math.min(1, delta / 120);
+        this.comboPunch = Math.max(0, this.comboPunch - delta / 220);
+
+        const color = combo >= 50 ? CSS.magenta : combo >= 25 ? CSS.cyan : CSS.yellow;
+        const colNum = combo >= 50 ? C.magenta : combo >= 25 ? C.cyan : C.yellow;
+        if (this.cache.comboCol !== color) {
+          this.cache.comboCol = color;
+          this.comboText.setColor(color).setShadow(0, 0, color, 22, true, true);
+          this.comboLabel.setColor(color).setShadow(0, 0, color, 8, true, true);
+        }
+        if (combo > 1) {
+          this.set('combo', this.comboText, 'x' + combo);
+          this.set('comboBonus', this.comboBonus, `+${Math.round(comboAtkBonus(combo) * 100)}% ATK SPEED`);
+        }
+        // Squash-and-stretch punch on each new kill.
+        const p = this.comboPunch;
+        this.comboText.setScale(1 + p * 0.55, 1 + p * 0.3).setAngle(-6 + p * 10);
+        this.comboGroup.forEach((o) => o.setAlpha(this.comboAlpha));
+
+        const g = this.comboGfx;
+        g.clear();
+        if (this.comboAlpha > 0.02) {
+          g.setAlpha(this.comboAlpha);
+          glowBar(g, W - 40 - 190, 374, 190, 16, clamp(gs.comboTimer / COMBO_WINDOW, 0, 1), colNum);
+        }
       }
     }
 
@@ -1938,7 +2063,7 @@
           g.fillStyle(C.ink, 0.95); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.fillStyle(card.color, hover ? 0.16 : 0.07); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.lineStyle(14, card.color, hover ? 0.22 : 0.08); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
-          g.lineStyle(3, card.color, 1); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.lineStyle(4, card.color, 1); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
           g.lineStyle(1, card.color, 0.4); g.lineBetween(-w / 2 + 24, -10, w / 2 - 24, -10);
         };
         draw(false);
@@ -2047,6 +2172,7 @@
         this.cameras.main.fadeIn(300, 5, 7, 13);
         this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0).setAlpha(0.6);
         this.add.rectangle(0, 0, W, H, C.ink, 0.45).setOrigin(0);
+        this.add.image(W / 2, H / 2, 'vignette_dark').setDisplaySize(W, H);
 
         const title = neonText(this, W / 2, 110, 'YOU GOT ERASED', 80, CSS.magenta, { glow: 26 }).setAngle(-2);
         this.tweens.add({ targets: title, angle: 2, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
@@ -2117,7 +2243,7 @@
         parent: 'game',
         width: W,
         height: H,
-        backgroundColor: '#05070d',
+        backgroundColor: '#0a0e17',
         scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
         physics: { default: 'arcade', arcade: { debug: false, gravity: { x: 0, y: 0 } } },
         input: { activePointers: 3 },
