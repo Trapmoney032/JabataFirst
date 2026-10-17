@@ -1,0 +1,1823 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#05070d">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Dungeon Doodler: a notebook-cyberpunk rogue-lite bullet-heaven.">
+  <title>Dungeon Doodler</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Permanent+Marker&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root { --cyan: #00f3ff; --magenta: #ff0055; --ink: #05070d; }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; width: 100%; height: 100%;
+      background: var(--ink);
+      overflow: hidden;
+      overscroll-behavior: none;
+      touch-action: none;
+      -webkit-user-select: none; user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background:
+        radial-gradient(ellipse at center, rgba(0, 243, 255, 0.06) 0%, rgba(5, 7, 13, 0) 60%),
+        var(--ink);
+    }
+    #game {
+      position: fixed; inset: 0;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+    #game canvas {
+      display: block;
+      touch-action: none;
+      outline: none;
+      box-shadow: 0 0 40px rgba(0, 243, 255, 0.12), 0 0 0 1px rgba(0, 243, 255, 0.15);
+    }
+    #boot {
+      position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+      color: var(--cyan); font: 22px "Share Tech Mono", "Courier New", monospace;
+      letter-spacing: 0.2em; text-shadow: 0 0 10px var(--cyan); pointer-events: none;
+    }
+    #rotate {
+      display: none; position: fixed; left: 0; right: 0; top: 0;
+      padding: 8px 12px; text-align: center; pointer-events: none;
+      font: 14px "Share Tech Mono", "Courier New", monospace; color: var(--magenta);
+      text-shadow: 0 0 8px var(--magenta); background: rgba(5, 7, 13, 0.7); z-index: 5;
+    }
+    @media (orientation: portrait) and (pointer: coarse) { #rotate { display: block; } }
+  </style>
+</head>
+<body>
+  <div id="game"></div>
+  <div id="boot">SHARPENING PENCILS…</div>
+  <div id="rotate">↻ Rotate your device to landscape for the best experience</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+  <script>
+  /**
+   * DUNGEON DOODLER
+   * A notebook-cyberpunk rogue-lite bullet-heaven built on Phaser 3 (Arcade Physics).
+   *
+   * Everything lives inside this IIFE so nothing leaks onto `window` (Phaser itself is the
+   * only global, provided by the CDN script above).
+   *
+   * Scene graph:
+   *   Boot      -> procedurally bakes every texture (no external art assets), then opens Menu.
+   *   Menu      -> title, PLAY GAME, SHOP, sound toggle, best run.
+   *   Shop      -> meta-progression purchases persisted in localStorage (`dungeonDoodler_save`).
+   *   Game      -> the run itself: arena, player, enemies, pooled projectiles/pickups, director.
+   *   HUD       -> runs in parallel above Game; health, XP, level, timer, coins, pause.
+   *   LevelUp   -> draft-card overlay; Game is paused underneath with `scene.pause()`.
+   *   Pause     -> pause overlay.
+   *   GameOver  -> run summary with RETRY / MAIN MENU.
+   */
+  (() => {
+    'use strict';
+
+    const bootEl = document.getElementById('boot');
+    if (typeof Phaser === 'undefined') {
+      bootEl.textContent = 'COULD NOT LOAD PHASER — CHECK YOUR CONNECTION AND REFRESH';
+      return;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Constants
+    // ------------------------------------------------------------------------------------
+    const W = 1280;
+    const H = 720;
+    const TAU = Math.PI * 2;
+
+    /** Arena size in world pixels; `wall` is the thickness of the charcoal border. */
+    const ARENA = { w: 2400, h: 1600, wall: 56 };
+
+    const C = {
+      cyan: 0x00f3ff,
+      magenta: 0xff0055,
+      yellow: 0xffd23f,
+      violet: 0xb04dff,
+      orange: 0xff9d1c,
+      green: 0x5dff9d,
+      white: 0xffffff,
+      ink: 0x05070d,
+      paper: 0x0a0f1c,
+      charcoal: 0x1a1b20,
+      graphite: 0x8a909c,
+    };
+    const hex = (c) => '#' + c.toString(16).padStart(6, '0');
+    const CSS = {
+      cyan: hex(C.cyan), magenta: hex(C.magenta), yellow: hex(C.yellow), green: hex(C.green),
+      violet: hex(C.violet), white: '#e8f6ff', dim: '#6b7d99', ink: '#05070d',
+    };
+
+    const FONT_HEAD = '"Permanent Marker", "Comic Sans MS", "Marker Felt", cursive';
+    const FONT_MONO = '"Share Tech Mono", "Courier New", monospace';
+
+    const IS_TOUCH = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+
+    const MAX_ENEMIES = 220;
+    const MAX_BULLETS = 400;
+    const MAX_GEMS = 300;
+    const MAX_COINS = 120;
+    const WAVE_LENGTH = 30; // seconds between difficulty steps
+
+    // ------------------------------------------------------------------------------------
+    // Small helpers
+    // ------------------------------------------------------------------------------------
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+    const fmtTime = (sec) => {
+      const s = Math.max(0, Math.floor(sec));
+      return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+    };
+    /** XP required to go from level `l` to `l + 1`. */
+    const xpForLevel = (l) => Math.round(4 + l * 3 + Math.pow(l, 1.6));
+
+    /** Neon-styled text factory. */
+    function neonText(scene, x, y, str, size, color, opts = {}) {
+      const t = scene.add.text(x, y, str, {
+        fontFamily: opts.mono ? FONT_MONO : FONT_HEAD,
+        fontSize: size + 'px',
+        color,
+        align: opts.align || 'center',
+        stroke: CSS.ink,
+        strokeThickness: opts.strokeThickness !== undefined ? opts.strokeThickness : Math.max(3, Math.round(size / 9)),
+        wordWrap: opts.wrap ? { width: opts.wrap, useAdvancedWrap: true } : undefined,
+        lineSpacing: opts.lineSpacing || 0,
+        // Room for the glow so the shadow blur isn't clipped into a visible box.
+        padding: { x: opts.glow === 0 ? 2 : (opts.glow || 12) + 4, y: opts.glow === 0 ? 2 : (opts.glow || 12) + 4 },
+      });
+      t.setOrigin(opts.ox !== undefined ? opts.ox : 0.5, opts.oy !== undefined ? opts.oy : 0.5);
+      if (opts.glow !== 0) t.setShadow(0, 0, color, opts.glow || 12, true, true);
+      return t;
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Save system (localStorage, defensive against corrupt data / disabled storage)
+    // ------------------------------------------------------------------------------------
+    const SAVE_KEY = 'dungeonDoodler_save';
+    const defaultSave = () => ({
+      version: 1,
+      coins: 0,
+      upgrades: { maxHp: 0, damage: 0, crit: 0 },
+      best: { time: 0, kills: 0, level: 1 },
+      runs: 0,
+      muted: false,
+    });
+    const safeInt = (v, min = 0, max = 1e9) => {
+      const n = Math.floor(Number(v));
+      return Number.isFinite(n) ? clamp(n, min, max) : min;
+    };
+
+    const Save = {
+      data: defaultSave(),
+      dirty: false,
+      load() {
+        const d = defaultSave();
+        try {
+          const raw = window.localStorage.getItem(SAVE_KEY);
+          if (raw) {
+            const p = JSON.parse(raw) || {};
+            d.coins = safeInt(p.coins);
+            d.runs = safeInt(p.runs);
+            d.muted = !!p.muted;
+            const u = p.upgrades || {};
+            for (const item of SHOP_ITEMS) d.upgrades[item.id] = safeInt(u[item.id], 0, item.max);
+            const b = p.best || {};
+            d.best.time = safeInt(b.time);
+            d.best.kills = safeInt(b.kills);
+            d.best.level = safeInt(b.level, 1);
+          }
+        } catch (e) { /* corrupt or blocked storage -> fresh profile */ }
+        this.data = d;
+        return d;
+      },
+      persist() {
+        this.dirty = false;
+        try { window.localStorage.setItem(SAVE_KEY, JSON.stringify(this.data)); } catch (e) { /* storage full / private mode */ }
+      },
+    };
+
+    // ------------------------------------------------------------------------------------
+    // Meta-shop catalogue
+    // ------------------------------------------------------------------------------------
+    const SHOP_ITEMS = [
+      { id: 'maxHp', name: 'MAX HP UP', desc: '+20 starting max health per level', icon: 'ic_heart', color: C.magenta, base: 20, growth: 1.55, max: 10 },
+      { id: 'damage', name: 'DAMAGE UP', desc: '+15% base damage per level', icon: 'ic_sharp', color: C.cyan, base: 30, growth: 1.6, max: 10 },
+      { id: 'crit', name: 'CRIT CHANCE UP', desc: '+4% critical hit chance per level', icon: 'ic_focus', color: C.yellow, base: 40, growth: 1.65, max: 10 },
+    ];
+    const shopPrice = (item, lvl) => Math.round(item.base * Math.pow(item.growth, lvl));
+
+    // ------------------------------------------------------------------------------------
+    // Level-up draft card pool
+    // ------------------------------------------------------------------------------------
+    const CARDS = [
+      { id: 'bouncy', name: 'BOUNCY SHOTS', desc: 'Projectiles ricochet off the arena walls up to 2 more times.', icon: 'ic_bouncy', color: C.cyan, max: 3,
+        apply: (s) => { s.bounces += 2; } },
+      { id: 'triple', name: 'TRIPLE SHOT', desc: 'Fire +2 additional parallel projectiles every volley.', icon: 'ic_triple', color: C.magenta, max: 3,
+        apply: (s) => { s.extraShots += 2; } },
+      { id: 'speed', name: 'SPEED BOOST', desc: 'Permanently +15% movement speed for this run.', icon: 'ic_speed', color: C.green, max: 5,
+        apply: (s) => { s.speed *= 1.15; } },
+      { id: 'vampire', name: 'VAMPIRIC TOUCH', desc: 'Restore 10% max HP on every elite kill and every 10 kills.', icon: 'ic_vampire', color: C.magenta, max: 1,
+        apply: (s) => { s.vampiric = true; } },
+      { id: 'rapid', name: 'RAPID SCRIBBLE', desc: 'Attack cooldown reduced by 15%.', icon: 'ic_rapid', color: C.yellow, max: 5,
+        apply: (s) => { s.attackCooldown = Math.max(0.12, s.attackCooldown * 0.85); } },
+      { id: 'sharp', name: 'SHARPENED LEAD', desc: '+25% projectile damage.', icon: 'ic_sharp', color: C.cyan, max: 6,
+        apply: (s) => { s.damage *= 1.25; } },
+      { id: 'paper', name: 'THICK PAPER', desc: '+25 max HP and fully restore health.', icon: 'ic_heart', color: C.magenta, max: 5,
+        apply: (s) => { s.maxHealth += 25; s.currentHealth = s.maxHealth; } },
+      { id: 'magnet', name: 'GEM MAGNET', desc: '+50% pickup radius for XP gems and coins.', icon: 'ic_magnet', color: C.violet, max: 3,
+        apply: (s) => { s.pickupRadius *= 1.5; } },
+      { id: 'focus', name: 'LASER FOCUS', desc: '+8% crit chance and +20% targeting range.', icon: 'ic_focus', color: C.yellow, max: 4,
+        apply: (s) => { s.critChance = Math.min(0.9, s.critChance + 0.08); s.range *= 1.2; } },
+    ];
+    /** Shown only when the pool cannot fill a full hand (everything maxed). */
+    const FILLER_CARD = { id: 'coffee', name: 'COFFEE BREAK', desc: 'Restore 40% max HP.', icon: 'ic_heart', color: C.green, max: Infinity, filler: true,
+      apply: (s) => { s.currentHealth = Math.min(s.maxHealth, s.currentHealth + s.maxHealth * 0.4); } };
+    const CARD_BY_ID = Object.fromEntries([...CARDS, FILLER_CARD].map((c) => [c.id, c]));
+
+    // ------------------------------------------------------------------------------------
+    // Enemy archetypes
+    // ------------------------------------------------------------------------------------
+    const ENEMY_TYPES = {
+      // Floats straight at the player and ignores internal pillars.
+      ghost: { tex: 'ghost', hp: 16, speed: 82, dmg: 8, radius: 15, xp: 1, coin: 0.22, phasing: true, color: C.magenta },
+      // Fast, fragile.
+      goblin: { tex: 'goblin', hp: 9, speed: 168, dmg: 6, radius: 14, xp: 1, coin: 0.18, phasing: false, color: C.orange },
+      // Slow, tanky.
+      blob: { tex: 'blob', hp: 70, speed: 48, dmg: 14, radius: 21, xp: 3, coin: 0.45, phasing: false, color: C.violet },
+    };
+
+    // ------------------------------------------------------------------------------------
+    // Procedural audio (WebAudio, no assets). Silently no-ops when unavailable.
+    // ------------------------------------------------------------------------------------
+    const Sfx = (() => {
+      let ctx = null;
+      let master = null;
+      const last = Object.create(null);
+
+      function ensure() {
+        if (ctx) return ctx;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return null;
+        try {
+          ctx = new AC();
+          master = ctx.createGain();
+          master.gain.value = 0.22;
+          master.connect(ctx.destination);
+        } catch (e) { ctx = null; }
+        return ctx;
+      }
+
+      function tone(freq, dur, type, vol, slideTo) {
+        const t0 = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, t0);
+        if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), t0 + dur);
+        gain.gain.setValueAtTime(vol, t0);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(t0);
+        osc.stop(t0 + dur + 0.02);
+        osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+      }
+
+      const presets = {
+        shoot: () => tone(920, 0.06, 'square', 0.05, 520),
+        hit: () => tone(240, 0.05, 'triangle', 0.12, 120),
+        crit: () => tone(1400, 0.08, 'sawtooth', 0.08, 700),
+        kill: () => tone(520, 0.12, 'triangle', 0.14, 90),
+        gem: () => tone(1200 + Math.random() * 300, 0.06, 'sine', 0.12, 1800),
+        coin: () => { tone(1320, 0.06, 'square', 0.07); setTimeout(() => ctx && tone(1760, 0.08, 'square', 0.07), 55); },
+        hurt: () => tone(160, 0.22, 'sawtooth', 0.22, 60),
+        level: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => ctx && tone(f, 0.16, 'triangle', 0.16), i * 70)),
+        click: () => tone(660, 0.05, 'square', 0.08, 880),
+        buy: () => [784, 1046, 1318].forEach((f, i) => setTimeout(() => ctx && tone(f, 0.1, 'square', 0.09), i * 60)),
+        deny: () => tone(180, 0.15, 'square', 0.1, 140),
+        die: () => tone(400, 0.9, 'sawtooth', 0.25, 40),
+        wave: () => tone(220, 0.5, 'sawtooth', 0.12, 660),
+      };
+
+      return {
+        unlock() {
+          const c = ensure();
+          if (c && c.state === 'suspended') c.resume().catch(() => {});
+        },
+        play(name, minGap = 0.03) {
+          if (Save.data.muted) return;
+          const c = ensure();
+          if (!c || c.state !== 'running' || !presets[name]) return;
+          const now = c.currentTime;
+          if (last[name] !== undefined && now - last[name] < minGap) return;
+          last[name] = now;
+          try { presets[name](); } catch (e) { /* ignore audio glitches */ }
+        },
+      };
+    })();
+    // Browsers require a user gesture before audio can start.
+    ['pointerdown', 'keydown', 'touchstart'].forEach((ev) => window.addEventListener(ev, () => Sfx.unlock(), { passive: true }));
+
+    // ------------------------------------------------------------------------------------
+    // Reusable neon button (Container with a centred hit area)
+    //   - Fires on pointerup only if the press began on the button: no ghost clicks from a
+    //     joystick release or a double-fired touch.
+    // ------------------------------------------------------------------------------------
+    class NeonButton extends Phaser.GameObjects.Container {
+      constructor(scene, x, y, w, h, label, color, onClick, size = 30) {
+        super(scene, x, y);
+        this.w = w; this.h = h; this.color = color; this.onClick = onClick;
+        this.enabled = true; this.hover = false; this.pressed = false;
+        this.gfx = scene.add.graphics();
+        this.label = neonText(scene, 0, 0, label, size, hex(color), { glow: 10 });
+        this.add([this.gfx, this.label]);
+        this.setSize(w, h);
+        this.setInteractive({ useHandCursor: true });
+        this.on('pointerover', () => { this.hover = true; this.redraw(); this.tweenScale(1.05); });
+        this.on('pointerout', () => { this.hover = false; this.pressed = false; this.redraw(); this.tweenScale(1); });
+        this.on('pointerdown', () => { if (this.enabled) { this.pressed = true; this.setScale(0.95); } });
+        this.on('pointerup', () => {
+          if (!this.pressed) return;
+          this.pressed = false;
+          this.setScale(this.hover ? 1.05 : 1);
+          if (!this.enabled) return;
+          Sfx.play('click');
+          this.onClick();
+        });
+        this.redraw();
+        scene.add.existing(this);
+      }
+      tweenScale(s) {
+        if (!this.enabled) return;
+        this.scene.tweens.killTweensOf(this);
+        this.scene.tweens.add({ targets: this, scale: s, duration: 90, ease: 'Quad.easeOut' });
+      }
+      redraw() {
+        const g = this.gfx, w = this.w, h = this.h, c = this.color;
+        const a = this.enabled ? 1 : 0.35;
+        g.clear();
+        g.fillStyle(C.ink, 0.88);
+        g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
+        g.fillStyle(c, (this.hover && this.enabled ? 0.22 : 0.08) * a);
+        g.fillRoundedRect(-w / 2, -h / 2, w, h, 12);
+        g.lineStyle(10, c, 0.1 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+        g.lineStyle(5, c, 0.22 * a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+        g.lineStyle(2.5, c, a); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 12);
+        this.label.setAlpha(a);
+      }
+      setEnabled(v) { this.enabled = v; this.redraw(); return this; }
+      setText(s) { this.label.setText(s); return this; }
+    }
+
+    /** Translucent full-screen rectangle that also swallows pointer input for the scenes below. */
+    function addBlocker(scene, alpha) {
+      return scene.add.rectangle(0, 0, W, H, C.ink, alpha).setOrigin(0).setInteractive();
+    }
+
+    // ------------------------------------------------------------------------------------
+    // BOOT: bake all textures procedurally
+    // ------------------------------------------------------------------------------------
+    /** Draws a stroke several times with decreasing width/alpha to fake a neon bloom. */
+    function neon(g, color, width, draw, core = true) {
+      const passes = [[width + 12, 0.05], [width + 7, 0.1], [width + 3, 0.25], [width, 1]];
+      for (const [w, a] of passes) { g.lineStyle(w, color, a); draw(g); }
+      if (core) { g.lineStyle(Math.max(1, width * 0.35), 0xffffff, 0.75); draw(g); }
+    }
+    const pts = (arr) => arr.map(([x, y]) => new Phaser.Math.Vector2(x, y));
+
+    /** Sketchy, slightly wobbly rectangle outline like a charcoal pencil. */
+    function sketchRect(g, x, y, w, h, jitter, step = 14) {
+      const edge = (x1, y1, x2, y2) => {
+        const len = Math.hypot(x2 - x1, y2 - y1);
+        const n = Math.max(2, Math.round(len / step));
+        g.beginPath();
+        g.moveTo(x1 + rand(-jitter, jitter), y1 + rand(-jitter, jitter));
+        for (let i = 1; i <= n; i++) {
+          const t = i / n;
+          g.lineTo(x1 + (x2 - x1) * t + rand(-jitter, jitter), y1 + (y2 - y1) * t + rand(-jitter, jitter));
+        }
+        g.strokePath();
+      };
+      edge(x, y, x + w, y); edge(x + w, y, x + w, y + h); edge(x + w, y + h, x, y + h); edge(x, y + h, x, y);
+    }
+
+    /** Charcoal hatching inside a rectangle. */
+    function hatch(g, x, y, w, h, count, color, alpha) {
+      for (let i = 0; i < count; i++) {
+        const x1 = rand(x, x + w), y1 = rand(y, y + h), d = rand(5, 16);
+        g.lineStyle(rand(1, 2.2), color, alpha * rand(0.4, 1));
+        g.lineBetween(x1, y1, Math.min(x + w, x1 + d), Math.max(y, y1 - d));
+      }
+    }
+
+    class BootScene extends Phaser.Scene {
+      constructor() { super('Boot'); }
+
+      create() {
+        const g = this.make.graphics({ x: 0, y: 0 }, false);
+        const bake = (key, w, h, fn) => {
+          g.clear();
+          fn(g, w, h);
+          g.generateTexture(key, w, h);
+        };
+
+        // ---- Player: neon cyan doodle with a magenta scribble crown ----
+        bake('player', 64, 64, (g) => {
+          g.fillStyle(C.cyan, 0.16); g.fillCircle(32, 33, 17);
+          neon(g, C.cyan, 3, (g) => g.strokeCircle(32, 33, 17));
+          g.fillStyle(0xffffff, 1); g.fillCircle(26, 30, 3.6); g.fillCircle(38, 30, 3.6);
+          g.fillStyle(C.ink, 1); g.fillCircle(27, 30.5, 1.7); g.fillCircle(39, 30.5, 1.7);
+          neon(g, C.cyan, 2, (g) => { g.beginPath(); g.arc(32, 35, 6, 0.15 * Math.PI, 0.85 * Math.PI, false); g.strokePath(); }, false);
+          neon(g, C.magenta, 2, (g) => g.strokePoints(pts([[23, 18], [27, 10], [31, 16], [35, 9], [39, 16], [42, 11]]), false), false);
+        });
+
+        // ---- Grumpy Ghost ----
+        const ghostPath = (g) => {
+          g.beginPath();
+          g.moveTo(17, 30);
+          g.arc(32, 30, 15, Math.PI, TAU, false);
+          g.lineTo(47, 47); g.lineTo(42, 42); g.lineTo(37, 47); g.lineTo(32, 42);
+          g.lineTo(27, 47); g.lineTo(22, 42); g.lineTo(17, 47);
+          g.closePath();
+        };
+        bake('ghost', 64, 64, (g) => {
+          g.fillStyle(C.magenta, 0.2); ghostPath(g); g.fillPath();
+          neon(g, C.magenta, 3, (g) => { ghostPath(g); g.strokePath(); });
+          g.fillStyle(0xffffff, 1); g.fillCircle(26, 31, 3.2); g.fillCircle(38, 31, 3.2);
+          g.lineStyle(2.5, 0xffffff, 1);
+          g.lineBetween(21, 23, 29, 27); g.lineBetween(43, 23, 35, 27);
+          g.strokePoints(pts([[27, 38], [30, 36], [33, 38], [36, 36]]), false);
+        });
+
+        // ---- Fast Goblin ----
+        const goblinPts = pts([[32, 14], [39, 22], [55, 15], [46, 31], [44, 44], [32, 51], [20, 44], [18, 31], [9, 15], [25, 22]]);
+        bake('goblin', 64, 64, (g) => {
+          g.fillStyle(C.orange, 0.2); g.fillPoints(goblinPts, true);
+          neon(g, C.orange, 2.5, (g) => g.strokePoints(goblinPts, true, true));
+          g.fillStyle(C.yellow, 1);
+          g.fillTriangle(23, 30, 30, 33, 23, 34); g.fillTriangle(41, 30, 34, 33, 41, 34);
+          g.lineStyle(2, 0xffffff, 1);
+          g.strokePoints(pts([[25, 41], [28, 44], [31, 41], [34, 44], [37, 41], [40, 44]]), false);
+        });
+
+        // ---- Blob Monster ----
+        const blobPts = [];
+        for (let i = 0; i < 18; i++) {
+          const a = (i / 18) * TAU;
+          const r = 21 + Math.sin(i * 2.7) * 1.8 + (Math.sin(a) > 0.6 ? 1.5 : 0);
+          blobPts.push(new Phaser.Math.Vector2(32 + Math.cos(a) * r, 33 + Math.sin(a) * r * 0.92));
+        }
+        bake('blob', 64, 64, (g) => {
+          g.fillStyle(C.violet, 0.24); g.fillPoints(blobPts, true);
+          neon(g, C.violet, 3, (g) => g.strokePoints(blobPts, true, true));
+          g.fillStyle(0xffffff, 1); g.fillCircle(25, 29, 5); g.fillCircle(40, 30, 3.5);
+          g.fillStyle(C.ink, 1); g.fillCircle(26, 30, 2.4); g.fillCircle(40.5, 31, 1.8);
+          g.lineStyle(2.5, 0xffffff, 0.9); g.lineBetween(26, 41, 39, 40);
+        });
+
+        // ---- Projectile ----
+        bake('bullet', 24, 24, (g) => {
+          g.fillStyle(C.cyan, 0.12); g.fillCircle(12, 12, 11);
+          g.fillStyle(C.cyan, 0.3); g.fillCircle(12, 12, 8);
+          g.fillStyle(C.cyan, 1); g.fillCircle(12, 12, 5.5);
+          g.fillStyle(0xffffff, 1); g.fillCircle(12, 12, 2.8);
+        });
+
+        // ---- Pickups ----
+        const gem = (key, color, s) => bake(key, 32, 32, (g) => {
+          const d = pts([[16, 16 - 9 * s], [16 + 7 * s, 16], [16, 16 + 9 * s], [16 - 7 * s, 16]]);
+          g.fillStyle(color, 0.35); g.fillPoints(d, true);
+          neon(g, color, 2, (g) => g.strokePoints(d, true, true));
+        });
+        gem('gem', C.cyan, 0.85);
+        gem('gem_big', C.magenta, 1.15);
+        bake('coin', 32, 32, (g) => {
+          g.fillStyle(C.yellow, 0.3); g.fillCircle(16, 16, 8);
+          neon(g, C.yellow, 2, (g) => g.strokeCircle(16, 16, 8));
+          g.lineStyle(2, 0xffffff, 0.9); g.lineBetween(16, 12, 16, 20);
+        });
+
+        // ---- FX ----
+        bake('spark', 16, 16, (g) => {
+          g.fillStyle(0xffffff, 0.25); g.fillCircle(8, 8, 7);
+          g.fillStyle(0xffffff, 0.6); g.fillCircle(8, 8, 4.5);
+          g.fillStyle(0xffffff, 1); g.fillCircle(8, 8, 2.5);
+        });
+        bake('aim', 32, 32, (g) => neon(g, C.cyan, 2.5, (g) => g.strokePoints(pts([[11, 8], [22, 16], [11, 24]]), false), false));
+        bake('joy_base', 170, 170, (g) => {
+          g.fillStyle(C.cyan, 0.07); g.fillCircle(85, 85, 72);
+          neon(g, C.cyan, 2.5, (g) => g.strokeCircle(85, 85, 72), false);
+        });
+        bake('joy_knob', 80, 80, (g) => {
+          g.fillStyle(C.cyan, 0.3); g.fillCircle(40, 40, 28);
+          neon(g, C.cyan, 3, (g) => g.strokeCircle(40, 40, 28));
+        });
+
+        // ---- Graph-paper floor (tileable) ----
+        bake('grid', 128, 128, (g) => {
+          g.fillStyle(C.paper, 1); g.fillRect(0, 0, 128, 128);
+          for (let i = 0; i < 70; i++) { g.fillStyle(0xffffff, rand(0.01, 0.035)); g.fillRect(rand(0, 128), rand(0, 128), 1.5, 1.5); }
+          g.lineStyle(1, C.cyan, 0.08);
+          for (let v = 32; v < 128; v += 32) { g.lineBetween(v + 0.5, 0, v + 0.5, 128); g.lineBetween(0, v + 0.5, 128, v + 0.5); }
+          g.lineStyle(2, C.cyan, 0.16);
+          g.lineBetween(1, 0, 1, 128); g.lineBetween(0, 1, 128, 1);
+        });
+        // Additive layer of only the major lines; its alpha pulses in-game ("dynamic grid").
+        bake('grid_major', 128, 128, (g) => {
+          g.lineStyle(2, C.cyan, 0.9);
+          g.lineBetween(1, 0, 1, 128); g.lineBetween(0, 1, 128, 1);
+        });
+
+        // ---- Charcoal walls (tileable strips) ----
+        const wall = (key, w, h) => bake(key, w, h, (g) => {
+          g.fillStyle(C.charcoal, 1); g.fillRect(0, 0, w, h);
+          hatch(g, 0, 0, w, h, Math.round((w * h) / 70), 0x50545e, 0.55);
+          hatch(g, 0, 0, w, h, Math.round((w * h) / 260), 0x9aa0ab, 0.3);
+        });
+        wall('wall_h', 128, ARENA.wall);
+        wall('wall_v', ARENA.wall, 128);
+
+        // ---- Pillars (internal obstacles) ----
+        bake('pillar', 100, 100, (g) => {
+          g.fillStyle(0x121317, 1); g.fillRect(6, 6, 88, 88);
+          hatch(g, 8, 8, 84, 84, 140, 0x5a5e68, 0.55);
+          g.lineStyle(2.5, C.graphite, 0.75); sketchRect(g, 6, 6, 88, 88, 1.6);
+          g.lineStyle(1.5, 0xc8ccd4, 0.35); sketchRect(g, 7, 7, 86, 86, 2.2);
+          g.lineStyle(2, C.magenta, 0.55); g.lineBetween(30, 30, 70, 70); g.lineBetween(70, 30, 30, 70);
+        });
+
+        // ---- Icons for cards and shop ----
+        const icon = (key, color, draw) => bake(key, 56, 56, (g) => neon(g, color, 3, draw));
+        icon('ic_bouncy', C.cyan, (g) => g.strokePoints(pts([[8, 44], [20, 14], [32, 40], [44, 12], [50, 22]]), false));
+        icon('ic_triple', C.magenta, (g) => { g.lineBetween(10, 16, 40, 16); g.lineBetween(10, 28, 46, 28); g.lineBetween(10, 40, 40, 40); g.strokePoints(pts([[38, 21], [47, 28], [38, 35]]), false); });
+        icon('ic_speed', C.green, (g) => { g.strokePoints(pts([[12, 14], [26, 28], [12, 42]]), false); g.strokePoints(pts([[28, 14], [42, 28], [28, 42]]), false); });
+        icon('ic_vampire', C.magenta, (g) => { g.beginPath(); g.moveTo(28, 8); g.lineTo(40, 30); g.arc(28, 34, 12.5, -0.3, Math.PI + 0.3, false); g.closePath(); g.strokePath(); });
+        icon('ic_rapid', C.yellow, (g) => g.strokePoints(pts([[32, 6], [16, 30], [28, 30], [22, 50], [42, 22], [30, 22], [34, 6]]), true, true));
+        icon('ic_sharp', C.cyan, (g) => { g.strokePoints(pts([[10, 46], [16, 34], [40, 10], [46, 16], [22, 40]]), true, true); g.lineBetween(16, 34, 22, 40); });
+        icon('ic_heart', C.magenta, (g) => { g.beginPath(); g.moveTo(28, 46); g.lineTo(10, 26); g.arc(19, 21, 9.5, Math.PI * 0.8, TAU, false); g.arc(37, 21, 9.5, Math.PI, Math.PI * 2.2, false); g.lineTo(28, 46); g.closePath(); g.strokePath(); });
+        icon('ic_magnet', C.violet, (g) => { g.beginPath(); g.arc(28, 26, 15, Math.PI, TAU, false); g.strokePath(); g.lineBetween(13, 26, 13, 44); g.lineBetween(43, 26, 43, 44); });
+        icon('ic_focus', C.yellow, (g) => { g.strokeCircle(28, 28, 14); g.lineBetween(28, 6, 28, 18); g.lineBetween(28, 38, 28, 50); g.lineBetween(6, 28, 18, 28); g.lineBetween(38, 28, 50, 28); });
+
+        g.destroy();
+
+        // ---- Low-health vignette (canvas radial gradient) ----
+        const vig = this.textures.createCanvas('vignette', 256, 144);
+        if (vig) {
+          const ctx = vig.getContext();
+          const grad = ctx.createRadialGradient(128, 72, 40, 128, 72, 150);
+          grad.addColorStop(0, 'rgba(255,0,85,0)');
+          grad.addColorStop(0.6, 'rgba(255,0,85,0.15)');
+          grad.addColorStop(1, 'rgba(255,0,85,0.85)');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, 256, 144);
+          vig.refresh();
+        }
+
+        bootEl.style.display = 'none';
+        this.scene.start('Menu');
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // MENU
+    // ------------------------------------------------------------------------------------
+    class MenuScene extends Phaser.Scene {
+      constructor() { super('Menu'); }
+
+      create() {
+        this.cameras.main.fadeIn(250, 5, 7, 13);
+        this.bg = this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0);
+        this.bgGlow = this.add.tileSprite(0, 0, W, H, 'grid_major').setOrigin(0).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.12);
+        this.add.rectangle(110, 0, 2, H, C.magenta, 0.35).setOrigin(0);
+
+        // Drifting background doodles
+        const keys = ['ghost', 'goblin', 'blob', 'ghost', 'blob', 'goblin', 'ghost', 'coin', 'gem'];
+        keys.forEach((k, i) => {
+          const d = this.add.image(rand(160, W - 60), rand(80, H - 80), k).setAlpha(0.28).setScale(rand(1, 1.8)).setAngle(rand(-15, 15));
+          this.tweens.add({ targets: d, x: d.x + rand(-80, 80), y: d.y + rand(-50, 50), angle: rand(-20, 20), duration: rand(3000, 6000), yoyo: true, repeat: -1, ease: 'Sine.easeInOut', delay: i * 120 });
+        });
+
+        const t1 = neonText(this, W / 2, 150, 'DUNGEON', 104, CSS.cyan, { glow: 24 });
+        const t2 = neonText(this, W / 2 + 20, 250, 'DOODLER', 104, CSS.magenta, { glow: 24 }).setAngle(-3);
+        this.tweens.add({ targets: [t1, t2], y: '+=8', duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        neonText(this, W / 2, 330, 'a notebook-cyberpunk bullet-heaven', 22, CSS.dim, { mono: true, glow: 0 });
+
+        new NeonButton(this, W / 2, 425, 380, 76, 'PLAY GAME', C.cyan, () => this.go('Game'), 36);
+        new NeonButton(this, W / 2, 520, 380, 76, 'SHOP', C.magenta, () => this.go('Shop'), 36);
+
+        // Wallet
+        this.add.image(W - 190, 46, 'coin').setScale(1.4);
+        neonText(this, W - 166, 46, String(Save.data.coins), 30, CSS.yellow, { mono: true, ox: 0 });
+
+        // Best run
+        const b = Save.data.best;
+        const bestStr = b.time > 0 ? `BEST RUN  ${fmtTime(b.time)}  •  ${b.kills} KILLS  •  LV ${b.level}` : 'NO RUNS YET — GO DOODLE SOME MONSTERS';
+        neonText(this, W / 2, 610, bestStr, 20, CSS.white, { mono: true, glow: 6 });
+        neonText(this, W / 2, 660,
+          IS_TOUCH ? 'DRAG ON THE LEFT SIDE TO MOVE  •  SHOOTING IS AUTOMATIC' : 'WASD / ARROWS TO MOVE  •  SHOOTING IS AUTOMATIC  •  ESC TO PAUSE',
+          16, CSS.dim, { mono: true, glow: 0 });
+
+        this.muteBtn = new NeonButton(this, 110, 46, 170, 50, '', C.violet, () => this.toggleMute(), 20);
+        this.refreshMute();
+
+        if (this.input.keyboard) {
+          this.input.keyboard.on('keydown-ENTER', () => this.go('Game'));
+          this.input.keyboard.on('keydown-SPACE', () => this.go('Game'));
+          this.input.keyboard.on('keydown-S', () => this.go('Shop'));
+        }
+        this.leaving = false;
+      }
+
+      toggleMute() {
+        Save.data.muted = !Save.data.muted;
+        Save.persist();
+        this.refreshMute();
+      }
+
+      refreshMute() { this.muteBtn.setText(Save.data.muted ? 'SOUND: OFF' : 'SOUND: ON'); }
+
+      go(key) {
+        if (this.leaving) return;
+        this.leaving = true;
+        this.cameras.main.fadeOut(180, 5, 7, 13);
+        this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start(key));
+      }
+
+      update(time, delta) {
+        const dt = Math.min(delta, 50) / 1000;
+        this.bg.tilePositionX += 14 * dt;
+        this.bg.tilePositionY += 7 * dt;
+        this.bgGlow.tilePositionX = this.bg.tilePositionX;
+        this.bgGlow.tilePositionY = this.bg.tilePositionY;
+        this.bgGlow.setAlpha(0.1 + 0.06 * Math.sin(time / 600));
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // SHOP (meta-progression)
+    // ------------------------------------------------------------------------------------
+    class ShopScene extends Phaser.Scene {
+      constructor() { super('Shop'); }
+
+      create() {
+        this.cameras.main.fadeIn(200, 5, 7, 13);
+        this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0);
+        this.add.rectangle(110, 0, 2, H, C.magenta, 0.35).setOrigin(0);
+
+        neonText(this, W / 2, 70, 'THE SUPPLY CLOSET', 64, CSS.magenta, { glow: 20 });
+        neonText(this, W / 2, 124, 'permanent upgrades — they carry over to every run', 20, CSS.dim, { mono: true, glow: 0 });
+
+        this.add.image(W / 2 - 60, 175, 'coin').setScale(1.5);
+        this.walletText = neonText(this, W / 2 - 34, 175, '', 34, CSS.yellow, { mono: true, ox: 0 });
+
+        this.rows = SHOP_ITEMS.map((item, i) => this.buildRow(item, 290 + i * 125));
+
+        new NeonButton(this, W / 2, 660, 260, 64, 'BACK', C.cyan, () => this.back(), 30);
+        if (this.input.keyboard) this.input.keyboard.on('keydown-ESC', () => this.back());
+        this.leaving = false;
+        this.refresh();
+      }
+
+      buildRow(item, y) {
+        const x0 = 160, w = W - 320, h = 108;
+        const g = this.add.graphics();
+        g.fillStyle(C.ink, 0.85); g.fillRoundedRect(x0, y - h / 2, w, h, 14);
+        g.lineStyle(6, item.color, 0.12); g.strokeRoundedRect(x0, y - h / 2, w, h, 14);
+        g.lineStyle(2, item.color, 0.8); g.strokeRoundedRect(x0, y - h / 2, w, h, 14);
+        this.add.image(x0 + 60, y, item.icon).setScale(1.2);
+        neonText(this, x0 + 110, y - 22, item.name, 30, hex(item.color), { ox: 0 });
+        neonText(this, x0 + 110, y + 20, item.desc, 18, CSS.white, { mono: true, ox: 0, glow: 0 });
+        const pips = this.add.graphics();
+        const lvlText = neonText(this, x0 + 600, y - 24, '', 18, CSS.dim, { mono: true, glow: 0 });
+        const btn = new NeonButton(this, x0 + w - 120, y, 200, 64, '', C.yellow, () => this.buy(item), 24);
+        return { item, y, pips, lvlText, btn, px: x0 + 502 };
+      }
+
+      buy(item) {
+        const lvl = Save.data.upgrades[item.id];
+        if (lvl >= item.max) return;
+        const price = shopPrice(item, lvl);
+        if (Save.data.coins < price) {
+          Sfx.play('deny');
+          this.cameras.main.shake(120, 0.004);
+          return;
+        }
+        Save.data.coins -= price;
+        Save.data.upgrades[item.id] = lvl + 1;
+        Save.persist();
+        Sfx.play('buy');
+        this.refresh();
+      }
+
+      refresh() {
+        this.walletText.setText(String(Save.data.coins));
+        for (const r of this.rows) {
+          const lvl = Save.data.upgrades[r.item.id];
+          const maxed = lvl >= r.item.max;
+          const price = shopPrice(r.item, lvl);
+          r.lvlText.setText(`LEVEL ${lvl} / ${r.item.max}`);
+          r.pips.clear();
+          for (let i = 0; i < r.item.max; i++) {
+            const x = r.px + i * 20, y = r.y + 14;
+            if (i < lvl) { r.pips.fillStyle(r.item.color, 1); r.pips.fillRect(x, y, 14, 14); }
+            r.pips.lineStyle(1.5, r.item.color, 0.7); r.pips.strokeRect(x, y, 14, 14);
+          }
+          r.btn.setText(maxed ? 'MAXED' : `BUY  ${price}`);
+          r.btn.setEnabled(!maxed && Save.data.coins >= price);
+        }
+      }
+
+      back() {
+        if (this.leaving) return;
+        this.leaving = true;
+        this.cameras.main.fadeOut(160, 5, 7, 13);
+        this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('Menu'));
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Pooled entities
+    // ------------------------------------------------------------------------------------
+    class Bullet extends Phaser.Physics.Arcade.Image {
+      constructor(scene, x, y) {
+        super(scene, x, y, 'bullet');
+        this.damage = 0; this.isCrit = false; this.bounces = 0; this.life = 0;
+      }
+
+      fire(x, y, angle, speed, damage, isCrit, bounces, life) {
+        this.enableBody(true, x, y, true, true);
+        this.setScale(isCrit ? 1.35 : 1);
+        this.body.setCircle(6, 6, 6);
+        this.scene.physics.velocityFromRotation(angle, speed, this.body.velocity);
+        this.setTint(isCrit ? C.magenta : 0xffffff);
+        this.damage = damage; this.isCrit = isCrit; this.bounces = bounces; this.life = life;
+        this.setDepth(12);
+        this.setBlendMode(Phaser.BlendModes.ADD);
+      }
+
+      preUpdate(time, delta) {
+        if (!this.active) return;
+        this.life -= delta / 1000;
+        if (this.life <= 0) { this.kill(); return; }
+        // Manual wall handling so we can count ricochets. We only reflect when the bullet is
+        // moving *outward*, which avoids double reflections without teleporting the body.
+        const b = this.scene.bounds, v = this.body.velocity;
+        if ((this.x < b.left && v.x < 0) || (this.x > b.right && v.x > 0)) {
+          if (this.bounces-- > 0) v.x = -v.x; else { this.kill(); return; }
+        }
+        if ((this.y < b.top && v.y < 0) || (this.y > b.bottom && v.y > 0)) {
+          if (this.bounces-- > 0) v.y = -v.y; else { this.kill(); return; }
+        }
+      }
+
+      kill() { this.disableBody(true, true); }
+    }
+
+    class Enemy extends Phaser.Physics.Arcade.Sprite {
+      constructor(scene, x, y) {
+        super(scene, x, y, 'ghost');
+        this.def = ENEMY_TYPES.ghost;
+        this.hp = 1; this.maxHp = 1; this.speed = 0; this.dmg = 0;
+        this.elite = false; this.flashT = 0; this.spawnT = 0; this.knockT = 0; this.phase = 0;
+      }
+
+      spawn(type, x, y, hpMult, speedMult, dmgMult, elite) {
+        const def = ENEMY_TYPES[type];
+        this.def = def;
+        this.setTexture(def.tex);
+        this.enableBody(true, x, y, true, true);
+        const s = elite ? 1.65 : 1;
+        this.setScale(s);
+        this.body.setCircle(def.radius, 32 - def.radius, 32 - def.radius);
+        this.elite = elite;
+        this.maxHp = Math.ceil(def.hp * hpMult * (elite ? 8 : 1));
+        this.hp = this.maxHp;
+        this.speed = def.speed * speedMult * (elite ? 0.85 : 1) * rand(0.9, 1.1);
+        this.dmg = def.dmg * dmgMult * (elite ? 1.5 : 1);
+        this.flashT = 0; this.spawnT = 0; this.knockT = 0;
+        this.phase = Math.random() * TAU;
+        this.clearTint();
+        this.setAlpha(0);
+        this.setRotation(0);
+        this.setDepth(elite ? 9 : 8);
+      }
+
+      /** Only deals contact damage after fading in: fair telegraphing of new spawns. */
+      get harmful() { return this.spawnT > 0.35; }
+
+      preUpdate(time, delta) {
+        super.preUpdate(time, delta);
+        if (!this.active) return;
+        const dt = Math.min(delta, 50) / 1000;
+        const scene = this.scene;
+        const p = scene.player;
+
+        this.spawnT += dt;
+        const fade = Math.min(1, this.spawnT / 0.35);
+        this.phase += dt * 6;
+
+        if (this.flashT > 0) {
+          this.flashT -= dt;
+          if (this.flashT <= 0) this.clearTint();
+        }
+
+        if (this.knockT > 0) {
+          this.knockT -= dt;
+          this.body.velocity.scale(0.9);
+        } else {
+          const a = Math.atan2(p.y - this.y, p.x - this.x);
+          let vx = Math.cos(a) * this.speed, vy = Math.sin(a) * this.speed;
+          if (this.def.phasing) {
+            // Ghosts drift in a lazy sine weave as they float through obstacles.
+            const w = Math.sin(this.phase * 0.5) * this.speed * 0.35;
+            vx += -Math.sin(a) * w; vy += Math.cos(a) * w;
+          }
+          this.body.setVelocity(vx, vy);
+        }
+
+        // Purely cosmetic animation (rotation/alpha never affect the arcade body).
+        if (this.def.phasing) {
+          this.setAlpha(fade * (0.72 + 0.2 * Math.sin(this.phase)));
+        } else {
+          this.setAlpha(fade);
+          this.setRotation(Math.sin(this.phase * (this.def === ENEMY_TYPES.goblin ? 2.2 : 0.6)) * 0.14);
+        }
+      }
+
+      /** Applies damage; returns true if this hit killed the enemy. */
+      hurt(amount, angle) {
+        this.hp -= amount;
+        this.setTintFill(0xffffff);
+        this.flashT = 0.06;
+        if (!this.elite && this.def !== ENEMY_TYPES.blob) {
+          this.body.setVelocity(Math.cos(angle) * 220, Math.sin(angle) * 220);
+          this.knockT = 0.08;
+        }
+        return this.hp <= 0;
+      }
+    }
+
+    class Pickup extends Phaser.Physics.Arcade.Image {
+      constructor(scene, x, y) {
+        super(scene, x, y, 'gem');
+        this.value = 1; this.magnet = false; this.spin = 0;
+      }
+
+      drop(x, y, value, texture) {
+        this.setTexture(texture);
+        this.enableBody(true, x, y, true, true);
+        this.body.setCircle(10, 6, 6);
+        this.value = value;
+        this.magnet = false;
+        this.spin = rand(-3, 3);
+        this.setDepth(5);
+        this.setScale(1);
+        const a = Math.random() * TAU, sp = rand(60, 160);
+        this.body.setVelocity(Math.cos(a) * sp, Math.sin(a) * sp);
+        this.body.setDrag(380, 380);
+      }
+
+      preUpdate(time, delta) {
+        if (!this.active) return;
+        this.rotation += this.spin * delta / 1000;
+      }
+
+      collect() { this.disableBody(true, true); }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // GAME (the run)
+    // ------------------------------------------------------------------------------------
+    class GameScene extends Phaser.Scene {
+      constructor() { super('Game'); }
+
+      init() {
+        this.isGameOver = false;
+        this.overlayOpen = false;
+        this.elapsed = 0;
+        this.kills = 0;
+        this.runCoins = 0;
+        this.level = 1;
+        this.xp = 0;
+        this.xpNext = xpForLevel(1);
+        this.fireTimer = 0.4;
+        this.invulnT = 0;
+        this.aimAngle = -Math.PI / 2;
+        this.cardStacks = {};
+        this.vampKills = 0;
+        this.hurtFlash = 0;
+        this.saveTimer = 0;
+        this.director = {
+          wave: 0, waveTimer: WAVE_LENGTH, spawnTimer: 1.2, spawnInterval: 1.35,
+          hpMult: 1, speedMult: 1, dmgMult: 1, eliteTimer: 40,
+        };
+      }
+
+      create() {
+        const up = Save.data.upgrades;
+        this.stats = {
+          maxHealth: 100 + up.maxHp * 20,
+          currentHealth: 0,
+          speed: 230,
+          damage: 10 * (1 + 0.15 * up.damage),
+          critChance: Math.min(0.75, 0.05 + 0.04 * up.crit),
+          critMult: 2,
+          attackCooldown: 0.6,
+          range: 460,
+          projectileSpeed: 640,
+          bounces: 0,
+          extraShots: 0,
+          vampiric: false,
+          pickupRadius: 95,
+        };
+        this.stats.currentHealth = this.stats.maxHealth;
+
+        this.bounds = new Phaser.Geom.Rectangle(ARENA.wall, ARENA.wall, ARENA.w - ARENA.wall * 2, ARENA.h - ARENA.wall * 2);
+        this.physics.world.setBounds(this.bounds.x, this.bounds.y, this.bounds.width, this.bounds.height);
+
+        this.buildArena();
+
+        // Player
+        this.player = this.physics.add.image(ARENA.w / 2, ARENA.h / 2, 'player').setDepth(10);
+        this.player.body.setCircle(16, 16, 17);
+        this.player.setCollideWorldBounds(true);
+        this.aim = this.add.image(this.player.x, this.player.y, 'aim').setDepth(11).setBlendMode(Phaser.BlendModes.ADD);
+
+        // Pools
+        this.bullets = this.physics.add.group({ classType: Bullet, maxSize: MAX_BULLETS, runChildUpdate: false });
+        this.enemies = this.physics.add.group({ classType: Enemy, maxSize: MAX_ENEMIES, runChildUpdate: false, collideWorldBounds: true });
+        this.gems = this.physics.add.group({ classType: Pickup, maxSize: MAX_GEMS, runChildUpdate: false });
+        this.coins = this.physics.add.group({ classType: Pickup, maxSize: MAX_COINS, runChildUpdate: false });
+
+        // Particle emitters (internally pooled by Phaser).
+        const burst = (tint) => this.add.particles(0, 0, 'spark', {
+          lifespan: { min: 220, max: 560 }, speed: { min: 60, max: 280 },
+          scale: { start: 0.9, end: 0 }, alpha: { start: 1, end: 0 },
+          blendMode: 'ADD', tint, emitting: false, maxAliveParticles: 350,
+        }).setDepth(20);
+        this.fx = {
+          [C.magenta]: burst(C.magenta), [C.orange]: burst(C.orange), [C.violet]: burst(C.violet),
+          [C.cyan]: burst(C.cyan), [C.yellow]: burst(C.yellow),
+        };
+
+        // Shared per-frame overlay graphics (elite rings + HP bars).
+        this.fxGfx = this.add.graphics().setDepth(15);
+
+        // Pooled floating damage numbers.
+        this.popTexts = [];
+        this.popIdx = 0;
+        for (let i = 0; i < 26; i++) {
+          const t = this.add.text(0, 0, '', { fontFamily: FONT_MONO, fontSize: '20px', color: '#ffffff', stroke: CSS.ink, strokeThickness: 4 })
+            .setOrigin(0.5).setDepth(30).setVisible(false);
+          this.popTexts.push({ t, life: 0 });
+        }
+
+        // Collisions
+        this.physics.add.collider(this.player, this.pillars);
+        this.physics.add.collider(this.enemies, this.pillars, null, (a, b) => {
+          const e = a instanceof Enemy ? a : b;
+          return !e.def.phasing; // Ghosts float straight through obstacles.
+        });
+        this.physics.add.collider(this.enemies, this.enemies);
+        this.physics.add.overlap(this.bullets, this.pillars, (a, b) => (a instanceof Bullet ? a : b).kill());
+        this.physics.add.overlap(this.bullets, this.enemies, this.onBulletHit, null, this);
+        this.physics.add.overlap(this.player, this.enemies, this.onPlayerTouch, null, this);
+        this.physics.add.overlap(this.player, this.gems, this.onGem, null, this);
+        this.physics.add.overlap(this.player, this.coins, this.onCoin, null, this);
+
+        // Camera
+        const cam = this.cameras.main;
+        cam.setBounds(0, 0, ARENA.w, ARENA.h);
+        cam.startFollow(this.player, false, 0.12, 0.12);
+        cam.setBackgroundColor(C.ink);
+        cam.fadeIn(300, 5, 7, 13);
+
+        // Keyboard
+        if (this.input.keyboard) {
+          this.keys = this.input.keyboard.addKeys('W,A,S,D,UP,DOWN,LEFT,RIGHT');
+          this.input.keyboard.on('keydown-ESC', () => this.requestPause());
+          this.input.keyboard.on('keydown-P', () => this.requestPause());
+        }
+
+        this.setupJoystick();
+
+        // Auto-pause when the tab is hidden or the window loses focus.
+        this._onVisibility = () => { if (document.hidden) this.requestPause(); };
+        document.addEventListener('visibilitychange', this._onVisibility);
+        this.game.events.on(Phaser.Core.Events.BLUR, this.requestPause, this);
+
+        this.events.on(Phaser.Scenes.Events.RESUME, this.onResume, this);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.cleanup, this);
+
+        this.scene.launch('HUD');
+        this.time.delayedCall(400, () => this.events.emit('banner', 'SURVIVE THE DOODLES!', CSS.cyan));
+      }
+
+      /** Removes every listener that outlives the scene (scene events, game events, DOM). */
+      cleanup() {
+        document.removeEventListener('visibilitychange', this._onVisibility);
+        this.game.events.off(Phaser.Core.Events.BLUR, this.requestPause, this);
+        this.events.off(Phaser.Scenes.Events.RESUME, this.onResume, this);
+        if (Save.dirty) Save.persist();
+        this.scene.stop('HUD');
+      }
+
+      buildArena() {
+        const { w, h, wall } = ARENA;
+        this.floor = this.add.tileSprite(0, 0, w, h, 'grid').setOrigin(0).setDepth(0);
+        this.floorGlow = this.add.tileSprite(0, 0, w, h, 'grid_major').setOrigin(0).setDepth(1)
+          .setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.1);
+        // Notebook margin line + punch holes.
+        this.add.rectangle(wall + 140, 0, 3, h, C.magenta, 0.32).setOrigin(0).setDepth(1);
+        for (let y = 260; y < h - 100; y += 420) this.add.circle(wall + 60, y, 18, C.ink, 1).setStrokeStyle(2, C.graphite, 0.5).setDepth(1);
+
+        // Walls: four tiled charcoal strips.
+        this.add.tileSprite(0, 0, w, wall, 'wall_h').setOrigin(0).setDepth(2);
+        this.add.tileSprite(0, h - wall, w, wall, 'wall_h').setOrigin(0).setDepth(2);
+        this.add.tileSprite(0, wall, wall, h - wall * 2, 'wall_v').setOrigin(0).setDepth(2);
+        this.add.tileSprite(w - wall, wall, wall, h - wall * 2, 'wall_v').setOrigin(0).setDepth(2);
+        // Hand-drawn inner border, drawn once.
+        const edge = this.add.graphics().setDepth(3);
+        edge.lineStyle(3, C.graphite, 0.8); sketchRect(edge, wall, wall, w - wall * 2, h - wall * 2, 2.5, 40);
+        edge.lineStyle(1.5, 0xd0d4dc, 0.35); sketchRect(edge, wall - 2, wall - 2, w - wall * 2 + 4, h - wall * 2 + 4, 3, 50);
+        edge.lineStyle(6, C.magenta, 0.08); edge.strokeRect(wall + 3, wall + 3, w - wall * 2 - 6, h - wall * 2 - 6);
+
+        // Internal obstacles (static bodies). The arena centre is kept clear for the spawn.
+        this.pillars = this.physics.add.staticGroup();
+        const layout = [
+          [0.2, 0.25], [0.5, 0.18], [0.8, 0.25],
+          [0.28, 0.72], [0.72, 0.72], [0.5, 0.84],
+          [0.12, 0.5], [0.88, 0.5],
+        ];
+        this.pillarRects = [];
+        for (const [fx, fy] of layout) {
+          const p = this.pillars.create(w * fx, h * fy, 'pillar').setDepth(4);
+          p.setAngle(0);
+          p.refreshBody();
+          this.pillarRects.push(new Phaser.Geom.Rectangle(p.x - 70, p.y - 70, 140, 140));
+        }
+      }
+
+      // ---------------- Joystick ----------------
+      setupJoystick() {
+        const restX = 160, restY = H - 160;
+        this.joy = { id: -1, active: false, bx: restX, by: restY, restX, restY, vx: 0, vy: 0, r: 72 };
+        const restAlpha = IS_TOUCH ? 0.35 : 0;
+        this.joyBase = this.add.image(restX, restY, 'joy_base').setScrollFactor(0).setDepth(1000).setAlpha(restAlpha);
+        this.joyKnob = this.add.image(restX, restY, 'joy_knob').setScrollFactor(0).setDepth(1001).setAlpha(restAlpha);
+        this.input.on('pointerdown', this.onJoyDown, this);
+        this.input.on('pointermove', this.onJoyMove, this);
+        this.input.on('pointerup', this.onJoyUp, this);
+        this.input.on('pointerupoutside', this.onJoyUp, this);
+      }
+
+      onJoyDown(p) {
+        const j = this.joy;
+        if (j.active || this.isGameOver) return;
+        // Touch: the joystick lives on the left side; mouse can drag-steer from anywhere.
+        if (p.wasTouch && p.x > W * 0.6) return;
+        j.active = true; j.id = p.id;
+        j.bx = p.x; j.by = p.y; j.vx = 0; j.vy = 0;
+        this.joyBase.setPosition(p.x, p.y).setAlpha(0.8);
+        this.joyKnob.setPosition(p.x, p.y).setAlpha(0.95);
+      }
+
+      onJoyMove(p) {
+        const j = this.joy;
+        if (!j.active || p.id !== j.id) return;
+        let dx = p.x - j.bx, dy = p.y - j.by;
+        const d = Math.hypot(dx, dy);
+        if (d > j.r) {
+          // Floating joystick: the base trails the finger so it never "runs out".
+          j.bx = p.x - (dx / d) * j.r;
+          j.by = p.y - (dy / d) * j.r;
+          dx = p.x - j.bx; dy = p.y - j.by;
+          this.joyBase.setPosition(j.bx, j.by);
+        }
+        this.joyKnob.setPosition(p.x, p.y);
+        const m = Math.min(1, Math.hypot(dx, dy) / j.r);
+        if (m < 0.12) { j.vx = 0; j.vy = 0; return; } // dead zone
+        const a = Math.atan2(dy, dx);
+        j.vx = Math.cos(a) * m; j.vy = Math.sin(a) * m;
+      }
+
+      onJoyUp(p) { if (p.id === this.joy.id) this.releaseJoystick(); }
+
+      releaseJoystick() {
+        const j = this.joy;
+        j.active = false; j.id = -1; j.vx = 0; j.vy = 0;
+        const restAlpha = IS_TOUCH ? 0.35 : 0;
+        this.joyBase.setPosition(j.restX, j.restY).setAlpha(restAlpha);
+        this.joyKnob.setPosition(j.restX, j.restY).setAlpha(restAlpha);
+      }
+
+      // ---------------- Pause / overlays ----------------
+      requestPause() {
+        if (this.isGameOver || this.overlayOpen || !this.scene.isActive()) return;
+        this.overlayOpen = true;
+        if (Save.dirty) Save.persist();
+        this.scene.pause();
+        this.scene.launch('Pause');
+      }
+
+      onResume() {
+        this.overlayOpen = false;
+        this.releaseJoystick();
+        if (this.input.keyboard) this.input.keyboard.resetKeys(); // key-ups were missed while paused
+      }
+
+      openLevelUp() {
+        this.overlayOpen = true;
+        Sfx.play('level');
+        const choices = this.draftCards(3).map((c) => ({ id: c.id, stack: this.cardStacks[c.id] || 0 }));
+        this.scene.pause();
+        this.scene.launch('LevelUp', { choices, level: this.level });
+      }
+
+      draftCards(n) {
+        const pool = CARDS.filter((c) => (this.cardStacks[c.id] || 0) < c.max);
+        Phaser.Utils.Array.Shuffle(pool);
+        const picks = pool.slice(0, n);
+        if (picks.length < n) picks.push(FILLER_CARD);
+        return picks;
+      }
+
+      applyCard(id) {
+        const card = CARD_BY_ID[id];
+        if (!card) return;
+        card.apply(this.stats, this);
+        this.cardStacks[id] = (this.cardStacks[id] || 0) + 1;
+        this.stats.currentHealth = Math.min(this.stats.currentHealth, this.stats.maxHealth);
+      }
+
+      // ---------------- Main loop ----------------
+      update(time, delta) {
+        const dt = Math.min(delta, 50) / 1000; // clamp hitches so timers can't skip ahead
+
+        this.floorGlow.setAlpha(0.08 + 0.05 * Math.sin(time / 700));
+        this.updatePopTexts(dt);
+        this.drawEliteFx();
+
+        if (this.isGameOver) return;
+
+        this.elapsed += dt;
+        this.updatePlayer(dt);
+        this.updateFiring(dt);
+        this.updatePickups(dt);
+        this.updateDirector(dt);
+
+        this.saveTimer += dt;
+        if (this.saveTimer > 2) { this.saveTimer = 0; if (Save.dirty) Save.persist(); }
+
+        // Level-ups are handled at the end of the frame, never inside a physics callback.
+        if (!this.overlayOpen && this.xp >= this.xpNext) {
+          this.xp -= this.xpNext;
+          this.level++;
+          this.xpNext = xpForLevel(this.level);
+          this.openLevelUp();
+        }
+      }
+
+      updatePlayer(dt) {
+        const s = this.stats;
+        let mx = 0, my = 0;
+        const k = this.keys;
+        if (k) {
+          if (k.A.isDown || k.LEFT.isDown) mx -= 1;
+          if (k.D.isDown || k.RIGHT.isDown) mx += 1;
+          if (k.W.isDown || k.UP.isDown) my -= 1;
+          if (k.S.isDown || k.DOWN.isDown) my += 1;
+        }
+        if (this.joy.active && (this.joy.vx || this.joy.vy)) { mx = this.joy.vx; my = this.joy.vy; }
+        const len = Math.hypot(mx, my);
+        if (len > 1) { mx /= len; my /= len; }
+        // Arcade integrates velocity (px/s) with the frame delta, so movement is frame-rate independent.
+        this.player.body.setVelocity(mx * s.speed, my * s.speed);
+        this.player.setRotation(mx * 0.12);
+
+        if (this.invulnT > 0) {
+          this.invulnT -= dt;
+          this.player.setAlpha(this.invulnT > 0 ? (Math.floor(this.invulnT * 20) % 2 ? 0.35 : 1) : 1);
+        }
+        if (this.hurtFlash > 0) this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.5);
+
+        const ax = this.player.x + Math.cos(this.aimAngle) * 34;
+        const ay = this.player.y + Math.sin(this.aimAngle) * 34;
+        this.aim.setPosition(ax, ay).setRotation(this.aimAngle);
+      }
+
+      findTarget() {
+        const px = this.player.x, py = this.player.y;
+        let best = null, bestD = this.stats.range * this.stats.range;
+        const list = this.enemies.getChildren();
+        for (let i = 0; i < list.length; i++) {
+          const e = list[i];
+          if (!e.active) continue;
+          const dx = e.x - px, dy = e.y - py, d = dx * dx + dy * dy;
+          if (d < bestD) { bestD = d; best = e; }
+        }
+        return best;
+      }
+
+      updateFiring(dt) {
+        this.fireTimer -= dt;
+        if (this.fireTimer > 0) return;
+        const target = this.findTarget();
+        if (!target) { this.fireTimer = 0.05; return; }
+        this.fireTimer = this.stats.attackCooldown;
+
+        const s = this.stats;
+        const a = Math.atan2(target.y - this.player.y, target.x - this.player.x);
+        this.aimAngle = a;
+        const n = 1 + s.extraShots;
+        const spacing = 13;
+        const cos = Math.cos(a), sin = Math.sin(a);
+        const life = (s.range * 1.3 / s.projectileSpeed) * (1 + s.bounces * 0.7);
+        for (let i = 0; i < n; i++) {
+          const off = (i - (n - 1) / 2) * spacing;
+          const b = this.bullets.get();
+          if (!b) break; // pool exhausted: skip rather than allocate
+          const crit = Math.random() < s.critChance;
+          b.fire(
+            this.player.x + cos * 18 - sin * off,
+            this.player.y + sin * 18 + cos * off,
+            a, s.projectileSpeed, s.damage * (crit ? s.critMult : 1), crit, s.bounces, life,
+          );
+        }
+        Sfx.play('shoot', 0.07);
+      }
+
+      updatePickups(dt) {
+        const px = this.player.x, py = this.player.y;
+        const r2 = this.stats.pickupRadius * this.stats.pickupRadius;
+        const pull = (group) => {
+          const list = group.getChildren();
+          for (let i = 0; i < list.length; i++) {
+            const o = list[i];
+            if (!o.active) continue;
+            const dx = px - o.x, dy = py - o.y, d2 = dx * dx + dy * dy;
+            if (!o.magnet && d2 < r2) { o.magnet = true; o.body.setDrag(0, 0); }
+            if (o.magnet) {
+              const d = Math.sqrt(d2) || 1;
+              const sp = 420 + this.stats.speed;
+              o.body.setVelocity((dx / d) * sp, (dy / d) * sp);
+            }
+          }
+        };
+        pull(this.gems);
+        pull(this.coins);
+      }
+
+      // ---------------- Spawning director ----------------
+      updateDirector(dt) {
+        const d = this.director;
+
+        d.waveTimer -= dt;
+        if (d.waveTimer <= 0) {
+          d.waveTimer += WAVE_LENGTH;
+          d.wave++;
+          d.spawnInterval = Math.max(0.22, d.spawnInterval * 0.84);
+          d.hpMult *= 1.27;
+          d.speedMult = Math.min(1.35, d.speedMult + 0.04);
+          d.dmgMult += 0.1;
+          this.events.emit('banner', `WAVE ${d.wave + 1} — THE DOODLES GROW STRONGER`, CSS.magenta);
+          Sfx.play('wave');
+          this.spawnElite();
+        }
+
+        d.eliteTimer -= dt;
+        if (d.eliteTimer <= 0) {
+          d.eliteTimer = Math.max(18, 45 - d.wave * 3);
+          this.spawnElite();
+        }
+
+        d.spawnTimer -= dt;
+        if (d.spawnTimer <= 0) {
+          d.spawnTimer += d.spawnInterval;
+          const count = Math.min(7, 1 + Math.floor(d.wave * 0.6) + (Math.random() < 0.3 ? 1 : 0));
+          const pos = this.findSpawnPoint();
+          for (let i = 0; i < count; i++) {
+            this.spawnEnemy(this.pickEnemyType(), pos.x + rand(-45, 45), pos.y + rand(-45, 45), false);
+          }
+        }
+      }
+
+      pickEnemyType() {
+        const w = this.director.wave;
+        const table = [['ghost', 6], ['goblin', w >= 1 ? 4 : 2], ['blob', w >= 2 ? 2 + w * 0.3 : (w >= 1 ? 1 : 0)]];
+        let total = 0;
+        for (const [, wt] of table) total += wt;
+        let r = Math.random() * total;
+        for (const [k, wt] of table) { if ((r -= wt) < 0) return k; }
+        return 'ghost';
+      }
+
+      findSpawnPoint() {
+        const b = this.bounds, p = this.player;
+        let x = 0, y = 0;
+        for (let tries = 0; tries < 12; tries++) {
+          const a = Math.random() * TAU, dist = rand(560, 820);
+          x = clamp(p.x + Math.cos(a) * dist, b.left + 50, b.right - 50);
+          y = clamp(p.y + Math.sin(a) * dist, b.top + 50, b.bottom - 50);
+          const farEnough = Phaser.Math.Distance.Between(x, y, p.x, p.y) > 420;
+          if (farEnough && !this.pillarRects.some((r) => r.contains(x, y))) break;
+        }
+        return { x, y };
+      }
+
+      spawnEnemy(type, x, y, elite) {
+        const e = this.enemies.get();
+        if (!e) return null; // at MAX_ENEMIES: the director simply waits
+        const d = this.director;
+        e.spawn(type, clamp(x, this.bounds.left + 30, this.bounds.right - 30), clamp(y, this.bounds.top + 30, this.bounds.bottom - 30),
+          d.hpMult, d.speedMult, d.dmgMult, elite);
+        return e;
+      }
+
+      spawnElite() {
+        const types = ['ghost', 'goblin', 'blob'];
+        const pos = this.findSpawnPoint();
+        if (this.spawnEnemy(types[Math.floor(Math.random() * types.length)], pos.x, pos.y, true)) {
+          this.events.emit('banner', 'ELITE INCOMING!', CSS.yellow);
+        }
+      }
+
+      // ---------------- Combat ----------------
+      onBulletHit(a, b) {
+        const bullet = a instanceof Bullet ? a : b;
+        const enemy = a instanceof Bullet ? b : a;
+        if (!bullet.active || !enemy.active) return;
+        const v = bullet.body.velocity;
+        const angle = Math.atan2(v.y, v.x);
+        const dmg = bullet.damage, crit = bullet.isCrit;
+        bullet.kill();
+
+        const dead = enemy.hurt(dmg, angle);
+        this.popText(enemy.x, enemy.y - 18 * enemy.scale, String(Math.round(dmg)), crit ? CSS.magenta : CSS.white, crit ? 28 : 18);
+        this.fx[C.cyan].explode(crit ? 6 : 3, bullet.x, bullet.y);
+        Sfx.play(crit ? 'crit' : 'hit', 0.04);
+        if (dead) this.killEnemy(enemy);
+      }
+
+      killEnemy(e) {
+        this.kills++;
+        const def = e.def;
+        const emitter = this.fx[def.color] || this.fx[C.magenta];
+        emitter.explode(e.elite ? 40 : 12, e.x, e.y);
+
+        this.dropGem(e.x, e.y, def.xp * (e.elite ? 6 : 1));
+        if (e.elite) {
+          for (let i = 0; i < 5; i++) this.dropCoin(e.x + rand(-20, 20), e.y + rand(-20, 20));
+          this.cameras.main.shake(160, 0.006);
+        } else if (Math.random() < def.coin) {
+          this.dropCoin(e.x, e.y);
+        }
+
+        if (this.stats.vampiric) {
+          this.vampKills++;
+          if (e.elite || this.vampKills >= 10) {
+            if (!e.elite) this.vampKills = 0;
+            this.heal(this.stats.maxHealth * 0.1);
+          }
+        }
+
+        e.disableBody(true, true);
+        Sfx.play('kill', 0.05);
+      }
+
+      heal(amount) {
+        const s = this.stats;
+        const before = s.currentHealth;
+        s.currentHealth = Math.min(s.maxHealth, s.currentHealth + amount);
+        const gained = Math.round(s.currentHealth - before);
+        if (gained > 0) this.popText(this.player.x, this.player.y - 34, '+' + gained, CSS.green, 22);
+      }
+
+      dropGem(x, y, value) {
+        const g = this.gems.get();
+        if (g) {
+          g.drop(x, y, value, value >= 5 ? 'gem_big' : 'gem');
+          return;
+        }
+        // Pool full: merge the value into an existing gem instead of allocating more objects.
+        const list = this.gems.getChildren();
+        const other = list[Math.floor(Math.random() * list.length)];
+        if (other && other.active) {
+          other.value += value;
+          if (other.value >= 5) other.setTexture('gem_big');
+        } else {
+          this.xp += value;
+        }
+      }
+
+      dropCoin(x, y) {
+        const c = this.coins.get();
+        if (c) c.drop(x, y, 1, 'coin');
+        else this.addCoins(1); // pool full: credit directly
+      }
+
+      onPlayerTouch(player, enemy) {
+        if (this.isGameOver || this.invulnT > 0 || !enemy.active || !enemy.harmful) return;
+        const s = this.stats;
+        s.currentHealth -= enemy.dmg;
+        this.invulnT = 0.55;
+        this.hurtFlash = 1;
+        this.cameras.main.shake(140, 0.008);
+        this.popText(player.x, player.y - 30, '-' + Math.round(enemy.dmg), CSS.magenta, 24);
+        this.fx[C.magenta].explode(10, player.x, player.y);
+        Sfx.play('hurt', 0.1);
+        if (s.currentHealth <= 0) {
+          s.currentHealth = 0;
+          this.playerDie();
+        }
+      }
+
+      onGem(player, gem) {
+        if (!gem.active) return;
+        this.xp += gem.value;
+        gem.collect();
+        Sfx.play('gem', 0.03);
+      }
+
+      onCoin(player, coin) {
+        if (!coin.active) return;
+        coin.collect();
+        this.addCoins(coin.value);
+        Sfx.play('coin', 0.06);
+      }
+
+      addCoins(n) {
+        this.runCoins += n;
+        Save.data.coins += n;  // persistent wallet, flushed to localStorage on a short timer
+        Save.dirty = true;
+      }
+
+      playerDie() {
+        this.isGameOver = true;
+        this.releaseJoystick();
+        this.player.body.setVelocity(0, 0);
+        this.player.body.enable = false;
+        this.player.setVisible(false);
+        this.aim.setVisible(false);
+        this.fx[C.cyan].explode(60, this.player.x, this.player.y);
+        this.fx[C.magenta].explode(40, this.player.x, this.player.y);
+        this.cameras.main.shake(400, 0.015);
+        this.cameras.main.flash(200, 255, 0, 85);
+        Sfx.play('die');
+
+        const best = Save.data.best;
+        const newBest = Math.floor(this.elapsed) > best.time;
+        best.time = Math.max(best.time, Math.floor(this.elapsed));
+        best.kills = Math.max(best.kills, this.kills);
+        best.level = Math.max(best.level, this.level);
+        Save.data.runs++;
+        Save.persist();
+
+        const summary = { time: this.elapsed, kills: this.kills, coins: this.runCoins, level: this.level, newBest };
+        this.time.delayedCall(1100, () => {
+          this.cameras.main.fadeOut(300, 5, 7, 13);
+          this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start('GameOver', summary));
+        });
+      }
+
+      // ---------------- FX helpers ----------------
+      popText(x, y, str, color, size) {
+        const p = this.popTexts[this.popIdx];
+        this.popIdx = (this.popIdx + 1) % this.popTexts.length;
+        p.t.setText(str).setColor(color).setFontSize(size).setPosition(x + rand(-10, 10), y).setAlpha(1).setVisible(true);
+        p.life = 0.65;
+      }
+
+      updatePopTexts(dt) {
+        for (const p of this.popTexts) {
+          if (p.life <= 0) continue;
+          p.life -= dt;
+          p.t.y -= 55 * dt;
+          p.t.setAlpha(Math.min(1, p.life / 0.3));
+          if (p.life <= 0) p.t.setVisible(false);
+        }
+      }
+
+      drawEliteFx() {
+        const g = this.fxGfx;
+        g.clear();
+        const list = this.enemies.getChildren();
+        for (let i = 0; i < list.length; i++) {
+          const e = list[i];
+          if (!e.active || !e.elite) continue;
+          const r = 34 * e.scale * 0.75;
+          g.lineStyle(2, C.yellow, 0.35 + 0.25 * Math.sin(e.phase));
+          g.strokeCircle(e.x, e.y, r + 4);
+          const w = 54, pct = clamp(e.hp / e.maxHp, 0, 1);
+          g.fillStyle(C.ink, 0.85); g.fillRect(e.x - w / 2, e.y - r - 16, w, 6);
+          g.fillStyle(C.yellow, 1); g.fillRect(e.x - w / 2, e.y - r - 16, w * pct, 6);
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // HUD (pinned to the screen; runs in parallel with Game)
+    // ------------------------------------------------------------------------------------
+    class HUDScene extends Phaser.Scene {
+      constructor() { super('HUD'); }
+
+      create() {
+        this.gs = this.scene.get('Game');
+        this.vignette = this.add.image(W / 2, H / 2, 'vignette').setDisplaySize(W, H).setAlpha(0);
+        this.g = this.add.graphics();
+
+        this.lvlText = neonText(this, 24, 34, '', 30, CSS.cyan, { ox: 0 });
+        this.hpText = neonText(this, 30 + 160, 71, '', 16, CSS.white, { mono: true, glow: 0, strokeThickness: 3 });
+        this.timeText = neonText(this, W / 2, 42, '', 40, CSS.white, { mono: true, glow: 8 });
+        this.waveText = neonText(this, W / 2, 78, '', 16, CSS.dim, { mono: true, glow: 0 });
+
+        this.add.image(W - 250, 42, 'coin').setScale(1.3);
+        this.coinText = neonText(this, W - 228, 42, '', 26, CSS.yellow, { mono: true, ox: 0 });
+        this.killText = neonText(this, W - 250, 78, '', 16, CSS.dim, { mono: true, ox: 0, glow: 0 });
+
+        new NeonButton(this, W - 52, 46, 64, 56, 'II', C.cyan, () => this.gs.requestPause(), 26);
+
+        this.banner = neonText(this, W / 2, 170, '', 40, CSS.magenta, { glow: 18 }).setAlpha(0);
+        this.dispHp = 1;
+        this.cache = {};
+
+        this.gs.events.on('banner', this.showBanner, this);
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.gs.events.off('banner', this.showBanner, this));
+      }
+
+      showBanner(text, color) {
+        this.tweens.killTweensOf(this.banner);
+        this.banner.setText(text).setColor(color).setShadow(0, 0, color, 18, true, true).setAlpha(0).setScale(0.8);
+        this.tweens.add({ targets: this.banner, alpha: 1, scale: 1, duration: 220, ease: 'Back.easeOut' });
+        this.tweens.add({ targets: this.banner, alpha: 0, delay: 1800, duration: 400 });
+      }
+
+      /** Only re-render a Text when its string actually changed (Text re-rasterises on setText). */
+      set(key, textObj, str) {
+        if (this.cache[key] !== str) { this.cache[key] = str; textObj.setText(str); }
+      }
+
+      update(time, delta) {
+        const gs = this.gs;
+        if (!gs || !gs.stats) return;
+        const s = gs.stats;
+        const hpPct = clamp(s.currentHealth / s.maxHealth, 0, 1);
+        const xpPct = clamp(gs.xp / gs.xpNext, 0, 1);
+        this.dispHp += (hpPct - this.dispHp) * Math.min(1, delta / 160);
+        if (this.dispHp < hpPct) this.dispHp = hpPct;
+
+        const g = this.g;
+        g.clear();
+        // XP bar across the very top of the screen.
+        g.fillStyle(C.ink, 0.85); g.fillRect(0, 0, W, 12);
+        g.fillStyle(C.cyan, 0.25); g.fillRect(0, 0, W * xpPct, 16);
+        g.fillStyle(C.cyan, 1); g.fillRect(0, 0, W * xpPct, 10);
+        g.lineStyle(1, C.cyan, 0.4); g.lineBetween(0, 12, W, 12);
+
+        // Health bar.
+        const x = 30, y = 60, w = 320, h = 22;
+        g.fillStyle(C.ink, 0.85); g.fillRoundedRect(x, y, w, h, 6);
+        g.fillStyle(0xffffff, 0.45); g.fillRect(x + 3, y + 3, (w - 6) * this.dispHp, h - 6);
+        g.fillStyle(C.magenta, 1); g.fillRect(x + 3, y + 3, (w - 6) * hpPct, h - 6);
+        g.lineStyle(6, C.magenta, 0.15); g.strokeRoundedRect(x, y, w, h, 6);
+        g.lineStyle(2, C.magenta, 0.9); g.strokeRoundedRect(x, y, w, h, 6);
+
+        this.set('lvl', this.lvlText, `LV ${gs.level}`);
+        this.set('hp', this.hpText, `${Math.ceil(s.currentHealth)} / ${Math.round(s.maxHealth)}`);
+        this.set('time', this.timeText, fmtTime(gs.elapsed));
+        this.set('wave', this.waveText, `WAVE ${gs.director.wave + 1}`);
+        this.set('coin', this.coinText, String(gs.runCoins));
+        this.set('kill', this.killText, `${gs.kills} KILLS`);
+
+        // Low-health pulse + hit flash.
+        let va = gs.hurtFlash * 0.6;
+        if (hpPct < 0.3 && !gs.isGameOver) va = Math.max(va, (0.3 + 0.2 * Math.sin(time / 140)) * (1 - hpPct / 0.3));
+        this.vignette.setAlpha(va);
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // LEVEL-UP DRAFT
+    // ------------------------------------------------------------------------------------
+    class LevelUpScene extends Phaser.Scene {
+      constructor() { super('LevelUp'); }
+
+      init(data) {
+        this.choices = (data && data.choices) || [];
+        this.level = (data && data.level) || 1;
+      }
+
+      create() {
+        this.gs = this.scene.get('Game');
+        this.ready = false;
+        this.done = false;
+        addBlocker(this, 0.78);
+
+        const title = neonText(this, W / 2, 110, 'LEVEL UP!', 76, CSS.cyan, { glow: 26 }).setScale(0.6).setAlpha(0);
+        this.tweens.add({ targets: title, scale: 1, alpha: 1, duration: 320, ease: 'Back.easeOut' });
+        neonText(this, W / 2, 172, `LEVEL ${this.level}  —  pick one upgrade`, 22, CSS.white, { mono: true, glow: 0 });
+
+        const n = this.choices.length;
+        const spacing = 350;
+        this.cards = this.choices.map((ch, i) => this.buildCard(ch, W / 2 + (i - (n - 1) / 2) * spacing, 420, i));
+
+        neonText(this, W / 2, 670, IS_TOUCH ? 'TAP A CARD' : 'CLICK A CARD  •  OR PRESS 1 / 2 / 3', 16, CSS.dim, { mono: true, glow: 0 });
+
+        if (this.input.keyboard) {
+          ['ONE', 'TWO', 'THREE'].forEach((k, i) => this.input.keyboard.on('keydown-' + k, () => this.pick(i)));
+        }
+        // Brief input guard so a tap/keypress already in flight can't pick a card by accident.
+        this.time.delayedCall(350, () => { this.ready = true; });
+      }
+
+      buildCard(choice, x, y, index) {
+        const card = CARD_BY_ID[choice.id];
+        const w = 310, h = 400;
+        const c = this.add.container(x, y + 60).setAlpha(0);
+        const g = this.add.graphics();
+        const draw = (hover) => {
+          g.clear();
+          g.fillStyle(C.ink, 0.95); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.fillStyle(card.color, hover ? 0.16 : 0.07); g.fillRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.lineStyle(14, card.color, hover ? 0.2 : 0.08); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.lineStyle(3, card.color, 1); g.strokeRoundedRect(-w / 2, -h / 2, w, h, 18);
+          g.lineStyle(1, card.color, 0.4); g.lineBetween(-w / 2 + 24, -10, w / 2 - 24, -10);
+        };
+        draw(false);
+        const icon = this.add.image(0, -120, card.icon).setScale(1.7);
+        const name = neonText(this, 0, -44, card.name, 30, hex(card.color), { wrap: w - 30 });
+        const desc = neonText(this, 0, 60, card.desc, 20, CSS.white, { mono: true, wrap: w - 50, glow: 0, lineSpacing: 4 });
+        const stackStr = card.filler ? 'BONUS' : (choice.stack === 0 ? 'NEW!' : `RANK ${choice.stack} → ${choice.stack + 1}`);
+        const stack = neonText(this, 0, h / 2 - 34, stackStr, 18, choice.stack === 0 ? CSS.yellow : CSS.dim, { mono: true, glow: choice.stack === 0 ? 8 : 0 });
+        const key = neonText(this, -w / 2 + 24, -h / 2 + 24, String(index + 1), 18, CSS.dim, { mono: true, glow: 0 });
+        c.add([g, icon, name, desc, stack, key]);
+        c.setSize(w, h);
+        c.setInteractive({ useHandCursor: true });
+
+        let pressed = false;
+        c.on('pointerover', () => { draw(true); this.tweens.add({ targets: c, scale: 1.04, duration: 100 }); });
+        c.on('pointerout', () => { pressed = false; draw(false); this.tweens.add({ targets: c, scale: 1, duration: 100 }); });
+        c.on('pointerdown', () => { pressed = true; });
+        c.on('pointerup', () => { if (pressed) { pressed = false; this.pick(index); } });
+
+        this.tweens.add({ targets: c, y, alpha: 1, duration: 300, delay: 80 + index * 90, ease: 'Back.easeOut' });
+        this.tweens.add({ targets: icon, y: -126, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+        return c;
+      }
+
+      pick(i) {
+        if (!this.ready || this.done || !this.choices[i]) return;
+        this.done = true;
+        Sfx.play('buy');
+        this.gs.applyCard(this.choices[i].id);
+        this.cards.forEach((c, j) => this.tweens.add({ targets: c, alpha: j === i ? 1 : 0, scale: j === i ? 1.1 : 0.9, duration: 160 }));
+        this.time.delayedCall(200, () => {
+          this.scene.resume('Game');
+          this.scene.stop();
+        });
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // PAUSE
+    // ------------------------------------------------------------------------------------
+    class PauseScene extends Phaser.Scene {
+      constructor() { super('Pause'); }
+
+      create() {
+        this.closing = false;
+        addBlocker(this, 0.72);
+        neonText(this, W / 2, 190, 'PAUSED', 84, CSS.cyan, { glow: 24 });
+        new NeonButton(this, W / 2, 330, 340, 72, 'RESUME', C.cyan, () => this.resumeGame(), 32);
+        this.muteBtn = new NeonButton(this, W / 2, 420, 340, 72, '', C.violet, () => this.toggleMute(), 28);
+        new NeonButton(this, W / 2, 510, 340, 72, 'MAIN MENU', C.magenta, () => this.toMenu(), 32);
+        this.refreshMute();
+        if (this.input.keyboard) {
+          this.input.keyboard.on('keydown-ESC', () => this.resumeGame());
+          this.input.keyboard.on('keydown-P', () => this.resumeGame());
+        }
+      }
+
+      toggleMute() { Save.data.muted = !Save.data.muted; Save.persist(); this.refreshMute(); }
+      refreshMute() { this.muteBtn.setText(Save.data.muted ? 'SOUND: OFF' : 'SOUND: ON'); }
+
+      resumeGame() {
+        if (this.closing) return;
+        this.closing = true;
+        this.scene.resume('Game');
+        this.scene.stop();
+      }
+
+      toMenu() {
+        if (this.closing) return;
+        this.closing = true;
+        this.scene.stop('Game'); // Game's shutdown handler also stops the HUD
+        this.scene.start('Menu');
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // GAME OVER
+    // ------------------------------------------------------------------------------------
+    class GameOverScene extends Phaser.Scene {
+      constructor() { super('GameOver'); }
+
+      init(data) { this.summary = data || { time: 0, kills: 0, coins: 0, level: 1, newBest: false }; }
+
+      create() {
+        const s = this.summary;
+        this.leaving = false;
+        this.cameras.main.fadeIn(300, 5, 7, 13);
+        this.add.tileSprite(0, 0, W, H, 'grid').setOrigin(0).setAlpha(0.6);
+        this.add.rectangle(0, 0, W, H, C.ink, 0.45).setOrigin(0);
+
+        const title = neonText(this, W / 2, 110, 'YOU GOT ERASED', 80, CSS.magenta, { glow: 26 }).setAngle(-2);
+        this.tweens.add({ targets: title, angle: 2, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+        const g = this.add.graphics();
+        g.fillStyle(C.ink, 0.9); g.fillRoundedRect(W / 2 - 300, 190, 600, 290, 18);
+        g.lineStyle(8, C.cyan, 0.1); g.strokeRoundedRect(W / 2 - 300, 190, 600, 290, 18);
+        g.lineStyle(2, C.cyan, 0.8); g.strokeRoundedRect(W / 2 - 300, 190, 600, 290, 18);
+
+        const rows = [
+          ['RUN TIME', fmtTime(s.time), CSS.white],
+          ['TOTAL KILLS', String(s.kills), CSS.white],
+          ['LEVEL REACHED', String(s.level), CSS.cyan],
+          ['COINS COLLECTED', '+' + s.coins, CSS.yellow],
+        ];
+        rows.forEach(([label, val, col], i) => {
+          const y = 240 + i * 62;
+          neonText(this, W / 2 - 250, y, label, 24, CSS.dim, { mono: true, ox: 0, glow: 0 });
+          const v = neonText(this, W / 2 + 250, y, val, 34, col, { mono: true, ox: 1, glow: 10 }).setAlpha(0);
+          this.tweens.add({ targets: v, alpha: 1, x: { from: W / 2 + 290, to: W / 2 + 250 }, delay: 200 + i * 140, duration: 260 });
+        });
+        if (s.newBest) {
+          const nb = neonText(this, W / 2 + 230, 196, 'NEW BEST!', 26, CSS.yellow, { glow: 14 }).setAngle(8);
+          this.tweens.add({ targets: nb, scale: 1.12, duration: 500, yoyo: true, repeat: -1 });
+        }
+        neonText(this, W / 2, 506, `WALLET: ${Save.data.coins} COINS — SPEND THEM IN THE SHOP`, 18, CSS.dim, { mono: true, glow: 0 });
+
+        const retry = new NeonButton(this, W / 2 - 190, 600, 340, 76, 'RETRY', C.cyan, () => this.go('Game'), 34);
+        const menu = new NeonButton(this, W / 2 + 190, 600, 340, 76, 'MAIN MENU', C.magenta, () => this.go('Menu'), 34);
+        // Guard against the tail end of a frantic touch landing on a button.
+        retry.disableInteractive(); menu.disableInteractive();
+        this.ready = false;
+        this.time.delayedCall(500, () => { this.ready = true; retry.setInteractive({ useHandCursor: true }); menu.setInteractive({ useHandCursor: true }); });
+
+        if (this.input.keyboard) {
+          this.input.keyboard.on('keydown-R', () => this.go('Game'));
+          this.input.keyboard.on('keydown-ENTER', () => this.go('Game'));
+          this.input.keyboard.on('keydown-M', () => this.go('Menu'));
+          this.input.keyboard.on('keydown-ESC', () => this.go('Menu'));
+        }
+      }
+
+      go(key) {
+        if (this.leaving || !this.ready) return;
+        this.leaving = true;
+        this.cameras.main.fadeOut(180, 5, 7, 13);
+        this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => this.scene.start(key));
+      }
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Bootstrap: wait briefly for the web fonts so Phaser rasterises text with them.
+    // ------------------------------------------------------------------------------------
+    Save.load();
+
+    const fontsReady = (document.fonts && document.fonts.load)
+      ? Promise.race([
+          Promise.all([document.fonts.load('40px "Permanent Marker"'), document.fonts.load('20px "Share Tech Mono"')]),
+          new Promise((r) => setTimeout(r, 2500)),
+        ]).catch(() => {})
+      : Promise.resolve();
+
+    fontsReady.then(() => {
+      // eslint-disable-next-line no-new
+      new Phaser.Game({
+        type: Phaser.AUTO,
+        parent: 'game',
+        width: W,
+        height: H,
+        backgroundColor: '#05070d',
+        scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
+        physics: { default: 'arcade', arcade: { debug: false, gravity: { x: 0, y: 0 } } },
+        input: { activePointers: 3 },
+        render: { antialias: true, powerPreference: 'high-performance' },
+        disableContextMenu: true,
+        banner: false,
+        scene: [BootScene, MenuScene, ShopScene, GameScene, HUDScene, LevelUpScene, PauseScene, GameOverScene],
+      });
+    });
+  })();
+  </script>
+</body>
+</html>
